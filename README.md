@@ -41,6 +41,13 @@ It can process direct text input or extract text from PDF files for narration.
 
 3.  **PyTorch:** Kokoro-TTS relies on PyTorch. Installation instructions can be found at [pytorch.org](https://pytorch.org/get-started/locally/). The `requirements.txt` includes `torch`.
 
+4.  **FFmpeg (for audio merging with `pydub`):**
+    `pydub` relies on FFmpeg (or libav) for audio processing. Ensure it's installed and in your system's PATH.
+    *   **Linux (Debian/Ubuntu):** `sudo apt-get install ffmpeg`
+    *   **Linux (Fedora):** `sudo dnf install ffmpeg`
+    *   **MacOS (using Homebrew):** `brew install ffmpeg`
+    *   **Windows:** Download FFmpeg static builds from [ffmpeg.org]
+
 ## Setup
 
 1.  **Clone the repository (or create the files as described):**
@@ -100,6 +107,9 @@ python main.py [OPTIONS]
         *   Example: `python main.py --text "The quick brown fox jumps over the lazy dog."`
     *   `--pdf "PATH_TO_PDF"`: Path to a PDF file to convert to speech.
         *   Example: `python main.py --pdf "report.pdf"`
+    *   `--text_file "PATH_TO_TXT"`: Path to a text file to convert to speech.
+        *   Example: `python main.py --text_file "notes.txt"`
+    *   **Note:** You can only specify one of `--text`, `--pdf`, or `--text_file` at a time.
 
 *   **Output Configuration:**
     *   `--output_dir "DIRECTORY_PATH"`: Directory to save the generated audio files.
@@ -107,6 +117,9 @@ python main.py [OPTIONS]
         *   Example: `python main.py --text "..." --output_dir "project_audio_files"`
     *   `--output_filename_base "BASE_NAME"`: Base name for output audio files. If not provided, it's derived from the PDF name or a timestamp for text input.
         *   Example: `python main.py --pdf "chapter1.pdf" --output_filename_base "chapter1_audio"`
+    *   `--merge_output`: A flag. If present, all generated audio segments will be merged into a single WAV file named `[output_filename_base]_merged.wav`.
+        *   Requires `pydub` and FFmpeg.
+        *   Example: `python main.py --pdf "story.pdf" --merge_output`
 
 *   **TTS Engine Configuration:**
     *   `--lang "LANG_CODE"`: Language code for Kokoro-TTS.
@@ -146,6 +159,15 @@ python main.py [OPTIONS]
             PYTORCH_ENABLE_MPS_FALLBACK=1 python main.py --text "..." --device "mps"
             ```
             The `--device "mps"` flag tells the script to attempt using MPS. The environment variable helps PyTorch manage operations on MPS.
+
+*   **Threading & Chunking (for PDF/TXT input):**
+    *   `--threads NUM_THREADS`: Number of worker threads for processing PDF/TXT chunks.
+        *   Default: `1` (sequential processing).
+        *   Recommended Max: `2-4` due to single TTS engine serialization.
+        *   Example: `python main.py --txt "large_novel.txt" --threads 2`
+    *   `--paragraphs_per_chunk NUM_PARAGRAPHS`: Number of paragraphs to group into a single chunk when processing PDFs/TXTs with threading.
+        *   Default: `30`
+        *   Example: `python main.py --pdf "large_doc.pdf" --threads 2 --paragraphs_per_chunk 50`
 
 *   **Other:**
     *   `--verbose` or `-v`: Enable detailed debug logging for troubleshooting.

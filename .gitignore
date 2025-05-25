@@ -120,3 +120,6 @@ coverage.xml
 
 # If you use tox
 .tox/
+
+# Example
+example/
