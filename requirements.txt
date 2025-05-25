@@ -1,0 +1,7 @@
+kokoro>=0.9.4
+soundfile
+torch
+PyPDF2
+misaki[en]
+# For Japanese support, add: misaki[ja]
+# For Chinese support, add: misaki[zh]

@@ -1,0 +1,122 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyd
+
+# Virtual environment
+venv/
+env/
+.venv/
+.env/
+ENV/
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# PyInstaller
+# Usually these files are created by PyInstaller, if you ever use it
+# *.manifest
+# *.spec
+
+# Output files from this specific application
+# This is the default output directory specified in main.py
+# If main.py is run from the root of the repo (e.g. `python kokoro_tts_app/main.py`)
+output_audio/
+my_audio
+# If main.py is run from within kokoro_tts_app/ (e.g. `cd kokoro_tts_app && python main.py`)
+# or if you decide to have a separate output dir within the app module
+kokoro_tts_app/output_audio/
+kokoro_tts_app/my_audio/
+
+
+# IDE & Editor specific files
+.vscode/
+.idea/
+*.project
+*.tmproj
+*.sublime-workspace
+*.sublime-project
+
+# MacOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Windows
+Thumbs.db
+ehthumbs_vista.db
+[Dd]esktop.ini
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment variables
+.env
+.env.*
+!/.env.example # Often good to commit an example env file
+
+# Pytest
+.pytest_cache/
+pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
+
+# MyPy cache
+.mypy_cache/
+
+# Local settings or config (if any, create a .example version to commit)
+# local_settings.py
+
+# Temporary files
+*~
+*.swp
+*.swo
+
+# If you ever download large model files manually into the project (not recommended)
+# models/
+# *.pt
+# *.pth
+# *.bin
+
+# Kokoro / Hugging Face cache files (these are usually stored outside the project,
+# but good to be aware if any local caching happens within the project dir)
+# .cache/
+
+# If you use tox
+.tox/
