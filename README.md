@@ -196,21 +196,3 @@ python main.py \
 *   **PDF Parsing Issues:** If a PDF yields no text or garbled text, it might be an image-based PDF or have complex formatting. This tool uses PyPDF2, which is best for text-based PDFs. For scanned PDFs, you'll need an OCR (Optical Character Recognition) step before using this tool.
 *   **Memory Issues for very long texts:** The `split_pattern` is crucial for breaking down long texts. If you encounter memory issues, try a more aggressive splitting pattern (e.g., splitting more frequently) or process the document in smaller sections manually.
 *   **`ModuleNotFoundError` or import errors:** Ensure you have activated your virtual environment (`source venv/bin/activate` or `venv\Scripts\activate`) and installed all packages from `requirements.txt`. If running from the root `tts-app` directory, use `python kokoro_tts_app/main.py ...`.
-
-## Project Structure
-```
-tts-app/                 # Root directory (cloned from GitHub)
-├── kokoro_tts_app/      # Main application package
-│   ├── main.py          # CLI entry point
-│   ├── tts_engine/
-│   │   ├── __init__.py
-│   │   └── processor.py # Kokoro TTS processing logic
-│   ├── utils/
-│   │   ├── __init__.py
-│   │   └── pdf_parser.py  # PDF text extraction logic
-│   │   └── file_handler.py# File/directory utilities
-│   ├── output_audio/    # Default directory for generated audio files (created if not exists)
-│   └── ...
-├── requirements.txt     # Project dependencies
-└── README.md            # This file
-```
