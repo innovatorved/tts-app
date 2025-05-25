@@ -192,20 +192,3 @@ tts-app/                 # Root directory (cloned from GitHub)
 ├── requirements.txt     # Project dependencies
 └── README.md            # This file
 ```
-
-**Key changes in this README update:**
-
-1.  **GitHub URL Added:** At the very top.
-2.  **Setup Instructions:** Clarified `cd tts-app` after cloning.
-3.  **Usage Instructions:**
-    *   Clarified how to run `main.py` depending on the current directory.
-    *   The "Command-line Options" section is now more structured, grouping options logically.
-    *   Each option has a brief explanation and often an example.
-    *   Explicitly listed supported language codes.
-    *   Pointed to the Kokoro-82M SAMPLES.md for voice model names.
-    *   Provided a more detailed explanation and example for `--device "mps"` including the `PYTORCH_ENABLE_MPS_FALLBACK=1` environment variable.
-    *   Added a more comprehensive "Advanced Example".
-4.  **Troubleshooting:** Added a note about `ModuleNotFoundError` and virtual environments.
-5.  **Project Structure:** Updated to reflect the root directory name (`tts-app`) if cloned from GitHub.
-
-This revised README should be much more helpful for users of your application. Remember to commit this `README.md` to your repository.
