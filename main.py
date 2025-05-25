@@ -12,7 +12,7 @@ import natsort
 # Adjust path to ensure the app's root directory is on sys.path
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 if SCRIPT_DIR not in sys.path:
-    sys.path.insert(0, SCRIPT_DIR)  # Insert at the beginning for higher precedence
+    sys.path.insert(0, SCRIPT_DIR)
 
 from tts_engine.processor import KokoroTTSProcessor
 from utils.pdf_parser import extract_text_from_pdf
@@ -148,12 +148,11 @@ def main():
         default=30,
         help="Number of paragraphs to group into one chunk for threaded PDF processing (default: 30).",
     )
-
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="Enable debug logging."
     )
-    args = parser.parse_args()
 
+    args = parser.parse_args()
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
         for handler in logging.getLogger().handlers:
