@@ -7,3 +7,4 @@ misaki[en]
 # For Chinese support, add: misaki[zh]
 pydub
 natsort
+gradio
