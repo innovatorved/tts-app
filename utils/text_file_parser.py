@@ -1,4 +1,3 @@
-# kokoro_tts_app/utils/text_file_parser.py
 import logging
 
 logger = logging.getLogger(__name__)

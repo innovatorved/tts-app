@@ -19,7 +19,11 @@ from utils.pdf_parser import extract_text_from_pdf
 from utils.file_handler import ensure_dir_exists
 from utils.text_file_parser import extract_text_from_txt
 from utils.audio_merger import merge_audio_files
-from utils.conversation_parser import extract_conversation_from_text, get_voice_for_speaker
+from utils.conversation_parser import (
+    extract_conversation_from_text,
+    get_voice_for_speaker,
+)
+from utils.split_text import split_text_into_chunks
 
 # --- Logging Setup ---
 # Basic configuration for logging
@@ -27,50 +31,6 @@ log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 logging.basicConfig(level=logging.INFO, format=log_format)
 logger = logging.getLogger(__name__)
 # ---
-
-
-def split_text_into_chunks(
-    full_text: str, max_paragraphs_per_chunk: int = 30
-) -> list[str]:
-    """Splits text into larger chunks based on paragraph count."""
-    if not full_text or not full_text.strip():
-        return []
-
-    # Normalize newlines then split by patterns that likely indicate paragraph breaks
-    normalized_text = full_text.replace("\r\n", "\n").replace("\r", "\n")
-    # Split by two or more newlines, possibly with spaces in between
-    paragraphs = re.split(r"\n\s*\n+", normalized_text)
-    paragraphs = [p.strip() for p in paragraphs if p.strip()]
-
-    if (
-        not paragraphs
-    ):  # If no clear paragraph breaks, treat as one large paragraph block
-        if normalized_text.strip():
-            paragraphs = [normalized_text.strip()]
-        else:
-            return []
-
-    chunks = []
-    current_chunk_paragraphs = []
-    for i, para in enumerate(paragraphs):
-        current_chunk_paragraphs.append(para)
-        if len(current_chunk_paragraphs) >= max_paragraphs_per_chunk or (i + 1) == len(
-            paragraphs
-        ):
-            chunks.append(
-                "\n\n".join(current_chunk_paragraphs)
-            )  # Rejoin with standard double newline
-            current_chunk_paragraphs = []
-
-    if not chunks and full_text.strip():  # Ensure at least one chunk if there's text
-        chunks = [
-            "\n\n".join(paragraphs)
-        ]  # Rejoin all found paragraphs if they didn't form a chunk
-
-    logger.info(
-        f"Split text into {len(chunks)} chunks, targeting up to {max_paragraphs_per_chunk} paragraphs per chunk."
-    )
-    return chunks
 
 
 def main():
@@ -221,12 +181,14 @@ def main():
             if not conversation_parts:
                 logger.error(f"No conversation parts found in: {args.conversation}")
                 return
-                
+
             if not base_filename:
                 base_filename = os.path.splitext(os.path.basename(args.conversation))[0]
             input_type = "conversation"
             is_conversation = True
-            logger.info(f"Found {len(conversation_parts)} conversation parts to process")
+            logger.info(
+                f"Found {len(conversation_parts)} conversation parts to process"
+            )
         else:
             logger.error(
                 f"Could not extract text from conversation file: {args.conversation}. Exiting."
@@ -247,7 +209,7 @@ def main():
             os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
         tts_processor = KokoroTTSProcessor(lang_code=args.lang, device=args.device)
-        
+
         # For regular text-to-speech, use the specified voice
         if not is_conversation:
             tts_processor.set_generation_params(
@@ -258,44 +220,51 @@ def main():
         return
 
     all_generated_files = []
-    
+
     # Define voice configuration for conversation mode
-    voice_config = {
-        "Man": args.male_voice,
-        "Woman": args.female_voice
-    }
-    
+    voice_config = {"Man": args.male_voice, "Woman": args.female_voice}
+
     # Initialize dictionaries for managing futures
     future_to_chunk_info = {}
     future_to_conv_info = {}
 
     if input_type == "conversation":
         # Process conversation with different voices for each speaker
-        logger.info("Processing conversation mode sequentially with different voices per speaker")
-        
+        logger.info(
+            "Processing conversation mode sequentially with different voices per speaker"
+        )
+
         future_to_conv_info = {}
-        
+
         # Process each conversation part with appropriate voice
-        if args.threads > 1 and len(conversation_parts) > 3:  # Use threading only if there are enough parts
-            logger.info(f"Processing {len(conversation_parts)} conversation parts with up to {args.threads} threads.")
-            with concurrent.futures.ThreadPoolExecutor(max_workers=args.threads) as executor:
+        if (
+            args.threads > 1 and len(conversation_parts) > 3
+        ):  # Use threading only if there are enough parts
+            logger.info(
+                f"Processing {len(conversation_parts)} conversation parts with up to {args.threads} threads."
+            )
+            with concurrent.futures.ThreadPoolExecutor(
+                max_workers=args.threads
+            ) as executor:
                 for i, (speaker, text) in enumerate(conversation_parts):
                     if not text.strip():
                         continue
-                        
+
                     # Get appropriate voice for speaker
                     voice = get_voice_for_speaker(speaker, voice_config)
-                    
+
                     # Set base filename to include speaker and part number
                     part_base_filename = f"{base_filename}_{speaker.lower()}_{i:02d}"
-                    
-                    logger.info(f"Processing conversation part {i} from {speaker} with voice {voice}")
-                    
+
+                    logger.info(
+                        f"Processing conversation part {i} from {speaker} with voice {voice}"
+                    )
+
                     # Set appropriate voice for this conversation part
                     tts_processor.set_generation_params(
                         voice=voice, speed=args.speed, split_pattern=args.split_pattern
                     )
-                    
+
                     future = executor.submit(
                         tts_processor.text_to_speech,
                         text=text,
@@ -308,7 +277,7 @@ def main():
                         "speaker": speaker,
                         "name": part_base_filename,
                     }
-                
+
                 for future in concurrent.futures.as_completed(future_to_conv_info):
                     info = future_to_conv_info[future]
                     try:
@@ -333,30 +302,32 @@ def main():
             for i, (speaker, text) in enumerate(conversation_parts):
                 if not text.strip():
                     continue
-                    
+
                 # Get appropriate voice for speaker
                 voice = get_voice_for_speaker(speaker, voice_config)
-                
+
                 # Set base filename to include speaker and part number
                 part_base_filename = f"{base_filename}_{speaker.lower()}_{i:02d}"
-                
-                logger.info(f"Processing conversation part {i} from {speaker} with voice {voice}")
-                
+
+                logger.info(
+                    f"Processing conversation part {i} from {speaker} with voice {voice}"
+                )
+
                 # Set appropriate voice for this conversation part
                 tts_processor.set_generation_params(
                     voice=voice, speed=args.speed, split_pattern=args.split_pattern
                 )
-                
+
                 part_files = tts_processor.text_to_speech(
                     text=text,
                     output_dir=args.output_dir,
                     base_filename=part_base_filename,
                     use_lock=False,  # Main thread, sequential operation
                 )
-                
+
                 if part_files:
                     all_generated_files.extend(part_files)
-    
+
     elif input_type in ["pdf_file", "text_file"]:
         # PDF processing can use chunking and threading
         text_chunks = split_text_into_chunks(text_to_process, args.paragraphs_per_chunk)
@@ -454,7 +425,7 @@ def main():
             logger.debug(
                 f"Collected {len(all_generated_files)} segment files. Sorting them for merge."
             )
-            
+
             # For conversation mode, we need to sort based on the conversation sequence number
             # rather than just natural sorting which would group speakers together
             if input_type == "conversation":
@@ -463,13 +434,19 @@ def main():
                 def get_conversation_order(filename):
                     # Extract the conversation part number from the filename
                     # The pattern is base_speaker_XX_segment_YYY.wav where XX is the part number
-                    match = re.search(r'_(?:man|woman)_(\d+)_segment', os.path.basename(filename))
+                    match = re.search(
+                        r"_(?:man|woman)_(\d+)_segment", os.path.basename(filename)
+                    )
                     if match:
                         return int(match.group(1))
                     return 0  # Fallback
-                
-                sorted_files_for_merging = sorted(all_generated_files, key=get_conversation_order)
-                logger.info("Conversation mode: Sorting audio segments by conversation sequence")
+
+                sorted_files_for_merging = sorted(
+                    all_generated_files, key=get_conversation_order
+                )
+                logger.info(
+                    "Conversation mode: Sorting audio segments by conversation sequence"
+                )
             else:
                 # For non-conversation modes, use standard natural sorting
                 sorted_files_for_merging = natsort.natsorted(all_generated_files)
@@ -498,7 +475,9 @@ def main():
                     )
                     # Add special message for conversation mode
                     if input_type == "conversation":
-                        logger.info("Conversation audio has been merged with alternating voices for different speakers.")
+                        logger.info(
+                            "Conversation audio has been merged with alternating voices for different speakers."
+                        )
                 else:
                     logger.error("Failed to merge audio segments.")
         # If not merging, individual segments are already saved.

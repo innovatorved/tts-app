@@ -1,4 +1,3 @@
-# kokoro_tts_app/tts_engine/processor.py
 import torch
 import soundfile as sf
 from kokoro import KPipeline

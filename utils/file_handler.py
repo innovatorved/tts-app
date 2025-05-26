@@ -1,4 +1,3 @@
-# kokoro_tts_app/utils/file_handler.py
 import os
 import logging
 

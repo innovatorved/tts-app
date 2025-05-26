@@ -1,4 +1,3 @@
-# kokoro_tts_app/utils/pdf_parser.py
 import PyPDF2
 import logging
 
