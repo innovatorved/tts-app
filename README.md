@@ -1,14 +1,15 @@
-# TTS Text/PDF to Audio Converter
+# Kokoro-TTS: Text/PDF to Audio Converter
 
 **Source Code:** [https://github.com/innovatorved/tts-app](https://github.com/innovatorved/tts-app)
 
 This application converts text or PDF documents into speech using the Kokoro-TTS engine.
-It can process direct text input or extract text from PDF files for narration.
+It can process direct text input, extract text from PDF files for narration, or convert conversations with different voices for each speaker.
 
 ## Features
 
 - Convert direct text to audio.
 - Convert PDF document content to audio.
+- Convert conversations with different voices for male and female speakers.
 - Customizable language, voice, and speech speed.
 - Outputs audio in WAV format, split into manageable segments.
 - Command-line interface for easy operation.
@@ -109,7 +110,11 @@ python main.py [OPTIONS]
         *   Example: `python main.py --pdf "report.pdf"`
     *   `--text_file "PATH_TO_TXT"`: Path to a text file to convert to speech.
         *   Example: `python main.py --text_file "notes.txt"`
-    *   **Note:** You can only specify one of `--text`, `--pdf`, or `--text_file` at a time.
+    *   `--conversation "PATH_TO_CONVERSATION_TXT"`: Path to a text file containing conversation with speaker labels.
+        *   Format: Text file with lines starting with "Man:" or "Woman:" to indicate speakers.
+        *   Example: `python main.py --conversation "conversation.txt" --merge_output`
+        *   Speaker lines should be formatted as "Man: Hello there!" or "Woman: Nice to meet you."
+    *   **Note:** You can only specify one of `--text`, `--pdf`, `--text_file`, or `--conversation` at a time.
 
 *   **Output Configuration:**
     *   `--output_dir "DIRECTORY_PATH"`: Directory to save the generated audio files.
@@ -135,10 +140,17 @@ python main.py [OPTIONS]
             *   `p`: Brazilian Portuguese (pt-br)
             *   `z`: Mandarin Chinese (requires `pip install misaki[zh]`)
         *   Example (Japanese): `python main.py --text "こんにちは" --lang "j"`
-    *   `--voice "VOICE_MODEL"`: Voice model to use.
+    *   `--voice "VOICE_MODEL"`: Voice model to use for non-conversation input.
         *   Default: `af_heart` (an American English female voice)
         *   Refer to [Kokoro-82M Hugging Face SAMPLES.md](https://huggingface.co/hexgrad/Kokoro-82M/blob/main/SAMPLES.md) for available voices and their corresponding language codes.
         *   Example (British English male voice, *name is illustrative, check link for actual names*): `python main.py --text "Good day!" --lang "b" --voice "bm_somevoicename"`
+    *   `--male_voice "VOICE_MODEL"`: Voice model to use for male speakers in conversation mode.
+        *   Default: `am_adam` (an American English male voice - strong and confident)
+        *   Other options: `am_michael` (warm and trustworthy), `am_echo` (resonant and clear), `am_eric` (professional and authoritative)
+        *   Example: `python main.py --conversation "dialog.txt" --male_voice "am_michael"`
+    *   `--female_voice "VOICE_MODEL"`: Voice model to use for female speakers in conversation mode.
+        *   Default: `af_heart` (an American English female voice)
+        *   Example: `python main.py --conversation "dialog.txt" --female_voice "af_soft"`
     *   `--speed SPEED_MULTIPLIER`: Speech speed. `1.0` is normal.
         *   Default: `1.0`
         *   Example (slower): `python main.py --text "..." --speed 0.8`
@@ -186,6 +198,21 @@ python main.py \
     --speed 0.95 \
     --output_dir "audiobooks/my_novel" \
     --output_filename_base "my_novel_chapter" \
+    --verbose
+```
+
+**Conversation Example (Dialog between Man and Woman):**
+
+```bash
+# Ensure you have a conversation text file formatted with "Man:" and "Woman:" prefixes
+# This example uses different voices for each speaker and merges the output
+python main.py \
+    --conversation "example/conversation.txt" \
+    --male_voice "am_calder" \
+    --female_voice "af_heart" \
+    --speed 1.0 \
+    --output_dir "dialogs/conversation1" \
+    --merge_output \
     --verbose
 ```
 
