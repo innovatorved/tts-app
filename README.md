@@ -1,4 +1,4 @@
-# Kokoro-TTS: Text/PDF to Audio Converter
+# TTS: Text/PDF/Conversation to Audio Converter
 
 **Source Code:** [https://github.com/innovatorved/tts-app](https://github.com/innovatorved/tts-app)
 
