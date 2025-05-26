@@ -270,6 +270,9 @@ def main():
                         text=text,
                         output_dir=args.output_dir,
                         base_filename=part_base_filename,
+                        voice=voice, 
+                        speed=args.speed,
+                        split_pattern=args.split_pattern,
                         use_lock=True,  # Critical for thread safety
                     )
                     future_to_conv_info[future] = {
@@ -311,17 +314,18 @@ def main():
 
                 logger.info(
                     f"Processing conversation part {i} from {speaker} with voice {voice}"
-                )
-
-                # Set appropriate voice for this conversation part
+                )                # Set appropriate voice for this conversation part
                 tts_processor.set_generation_params(
                     voice=voice, speed=args.speed, split_pattern=args.split_pattern
                 )
-
+                
                 part_files = tts_processor.text_to_speech(
                     text=text,
                     output_dir=args.output_dir,
                     base_filename=part_base_filename,
+                    voice=voice,  # Pass voice directly to ensure it's used
+                    speed=args.speed,
+                    split_pattern=args.split_pattern,
                     use_lock=False,  # Main thread, sequential operation
                 )
 
