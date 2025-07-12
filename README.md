@@ -208,8 +208,6 @@ python main.py \
 # This example uses different voices for each speaker and merges the output
 python main.py \
     --conversation "example/conversation.txt" \
-    --male_voice "am_calder" \
-    --female_voice "af_heart" \
     --speed 1.0 \
     --output_dir "dialogs/conversation1" \
     --merge_output \
