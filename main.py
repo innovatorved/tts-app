@@ -15,6 +15,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 from tts_engine.processor import KokoroTTSProcessor
+from tts_engine.chatterbox_processor import ChatterboxTTSProcessor
 from utils.pdf_parser import extract_text_from_pdf
 from utils.file_handler import ensure_dir_exists
 from utils.text_file_parser import extract_text_from_txt
@@ -35,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Kokoro-TTS Text/PDF to Audio Converter"
+        description="TTS: Text/PDF/Conversation to Audio (Kokoro or Chatterbox)"
     )
     input_group = parser.add_mutually_exclusive_group(required=True)
     input_group.add_argument(
@@ -60,6 +61,13 @@ def main():
         type=str,
         default="./output_audio",
         help="Directory to save the generated audio files (default: ./output_audio).",
+    )
+    parser.add_argument(
+        "--engine",
+        type=str,
+        default="kokoro",
+        choices=["kokoro", "chatterbox"],
+        help="TTS engine to use: 'kokoro' or 'chatterbox' (default: kokoro).",
     )
     parser.add_argument(
         "--lang",
@@ -87,6 +95,61 @@ def main():
     )
     parser.add_argument(
         "--speed", type=float, default=1.0, help="Speech speed. Default: 1.0."
+    )
+    # Chatterbox-specific generation options (ignored by Kokoro)
+    parser.add_argument(
+        "--cb_audio_prompt",
+        type=str,
+        default=None,
+        help="Chatterbox: path to a reference voice WAV file (audio prompt).",
+    )
+    parser.add_argument(
+        "--cb_audio_prompt_male",
+        type=str,
+        default=None,
+        help="Chatterbox: reference voice WAV for male speaker in conversation mode.",
+    )
+    parser.add_argument(
+        "--cb_audio_prompt_female",
+        type=str,
+        default=None,
+        help="Chatterbox: reference voice WAV for female speaker in conversation mode.",
+    )
+    parser.add_argument(
+        "--cb_exaggeration",
+        type=float,
+        default=0.5,
+        help="Chatterbox: emotion exaggeration (0.0-? typical 0.5).",
+    )
+    parser.add_argument(
+        "--cb_cfg_weight",
+        type=float,
+        default=0.5,
+        help="Chatterbox: classifier-free guidance weight (try 0.3-0.7).",
+    )
+    parser.add_argument(
+        "--cb_temperature",
+        type=float,
+        default=0.8,
+        help="Chatterbox: temperature for sampling.",
+    )
+    parser.add_argument(
+        "--cb_top_p",
+        type=float,
+        default=1.0,
+        help="Chatterbox: nucleus sampling top_p.",
+    )
+    parser.add_argument(
+        "--cb_min_p",
+        type=float,
+        default=0.05,
+        help="Chatterbox: minimum p sampler parameter.",
+    )
+    parser.add_argument(
+        "--cb_repetition_penalty",
+        type=float,
+        default=1.2,
+        help="Chatterbox: repetition penalty.",
     )
     parser.add_argument(
         "--output_filename_base",
@@ -155,6 +218,7 @@ def main():
             text_to_process = pdf_text
             if not base_filename:
                 base_filename = os.path.splitext(os.path.basename(args.pdf))[0]
+            input_type = "pdf_file"
         else:
             logger.error(f"Could not extract text from PDF: {args.pdf}. Exiting.")
             return
@@ -208,12 +272,25 @@ def main():
             )
             os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 
-        tts_processor = KokoroTTSProcessor(lang_code=args.lang, device=args.device)
-
-        # For regular text-to-speech, use the specified voice
-        if not is_conversation:
+        # Initialize engine
+        if args.engine == "kokoro":
+            tts_processor = KokoroTTSProcessor(lang_code=args.lang, device=args.device)
+            if not is_conversation:
+                tts_processor.set_generation_params(
+                    voice=args.voice, speed=args.speed, split_pattern=args.split_pattern
+                )
+        else:  # chatterbox
+            tts_processor = ChatterboxTTSProcessor(device=args.device)
+            # Seed Chatterbox defaults
             tts_processor.set_generation_params(
-                voice=args.voice, speed=args.speed, split_pattern=args.split_pattern
+                audio_prompt_path=args.cb_audio_prompt,
+                exaggeration=args.cb_exaggeration,
+                cfg_weight=args.cb_cfg_weight,
+                temperature=args.cb_temperature,
+                top_p=args.cb_top_p,
+                min_p=args.cb_min_p,
+                repetition_penalty=args.cb_repetition_penalty,
+                split_pattern=args.split_pattern,
             )
     except Exception as e:
         logger.error(f"Failed to initialize TTS processor: {e}")
@@ -230,9 +307,7 @@ def main():
 
     if input_type == "conversation":
         # Process conversation with different voices for each speaker
-        logger.info(
-            "Processing conversation mode sequentially with different voices per speaker"
-        )
+        logger.info("Processing conversation mode with different voices per speaker")
 
         future_to_conv_info = {}
 
@@ -250,7 +325,7 @@ def main():
                     if not text.strip():
                         continue
 
-                    # Get appropriate voice for speaker
+                    # For Kokoro: choose voice by speaker; for Chatterbox: keep audio_prompt as provided
                     voice = get_voice_for_speaker(speaker, voice_config)
 
                     # Set base filename to include speaker and part number
@@ -260,21 +335,44 @@ def main():
                         f"Processing conversation part {i} from {speaker} with voice {voice}"
                     )
 
-                    # Set appropriate voice for this conversation part
-                    tts_processor.set_generation_params(
-                        voice=voice, speed=args.speed, split_pattern=args.split_pattern
-                    )
-
-                    future = executor.submit(
-                        tts_processor.text_to_speech,
-                        text=text,
-                        output_dir=args.output_dir,
-                        base_filename=part_base_filename,
-                        voice=voice, 
-                        speed=args.speed,
-                        split_pattern=args.split_pattern,
-                        use_lock=True,  # Critical for thread safety
-                    )
+                    # Dispatch per engine
+                    if args.engine == "kokoro":
+                        tts_processor.set_generation_params(
+                            voice=voice, speed=args.speed, split_pattern=args.split_pattern
+                        )
+                        future = executor.submit(
+                            tts_processor.text_to_speech,
+                            text=text,
+                            output_dir=args.output_dir,
+                            base_filename=part_base_filename,
+                            voice=voice,
+                            speed=args.speed,
+                            split_pattern=args.split_pattern,
+                            use_lock=True,
+                        )
+                    else:
+                        # Chatterbox ignores Kokoro voice; rely on cb params
+                        # Choose per-speaker prompt if provided
+                        cb_prompt = (
+                            args.cb_audio_prompt_male if speaker == "Man" and args.cb_audio_prompt_male
+                            else args.cb_audio_prompt_female if speaker == "Woman" and args.cb_audio_prompt_female
+                            else args.cb_audio_prompt
+                        )
+                        future = executor.submit(
+                            tts_processor.text_to_speech,
+                            text=text,
+                            output_dir=args.output_dir,
+                            base_filename=part_base_filename,
+                            audio_prompt_path=cb_prompt,
+                            exaggeration=args.cb_exaggeration,
+                            cfg_weight=args.cb_cfg_weight,
+                            temperature=args.cb_temperature,
+                            top_p=args.cb_top_p,
+                            min_p=args.cb_min_p,
+                            repetition_penalty=args.cb_repetition_penalty,
+                            split_pattern=args.split_pattern,
+                            use_lock=True,
+                        )
                     future_to_conv_info[future] = {
                         "id": i,
                         "speaker": speaker,
@@ -306,7 +404,6 @@ def main():
                 if not text.strip():
                     continue
 
-                # Get appropriate voice for speaker
                 voice = get_voice_for_speaker(speaker, voice_config)
 
                 # Set base filename to include speaker and part number
@@ -314,20 +411,39 @@ def main():
 
                 logger.info(
                     f"Processing conversation part {i} from {speaker} with voice {voice}"
-                )                # Set appropriate voice for this conversation part
-                tts_processor.set_generation_params(
-                    voice=voice, speed=args.speed, split_pattern=args.split_pattern
                 )
-                
-                part_files = tts_processor.text_to_speech(
-                    text=text,
-                    output_dir=args.output_dir,
-                    base_filename=part_base_filename,
-                    voice=voice,  # Pass voice directly to ensure it's used
-                    speed=args.speed,
-                    split_pattern=args.split_pattern,
-                    use_lock=False,  # Main thread, sequential operation
-                )
+                if args.engine == "kokoro":
+                    tts_processor.set_generation_params(
+                        voice=voice, speed=args.speed, split_pattern=args.split_pattern
+                    )
+                    part_files = tts_processor.text_to_speech(
+                        text=text,
+                        output_dir=args.output_dir,
+                        base_filename=part_base_filename,
+                        voice=voice,
+                        speed=args.speed,
+                        split_pattern=args.split_pattern,
+                        use_lock=False,
+                    )
+                else:
+                    part_files = tts_processor.text_to_speech(
+                        text=text,
+                        output_dir=args.output_dir,
+                        base_filename=part_base_filename,
+                        audio_prompt_path=(
+                            args.cb_audio_prompt_male if speaker == "Man" and args.cb_audio_prompt_male
+                            else args.cb_audio_prompt_female if speaker == "Woman" and args.cb_audio_prompt_female
+                            else args.cb_audio_prompt
+                        ),
+                        exaggeration=args.cb_exaggeration,
+                        cfg_weight=args.cb_cfg_weight,
+                        temperature=args.cb_temperature,
+                        top_p=args.cb_top_p,
+                        min_p=args.cb_min_p,
+                        repetition_penalty=args.cb_repetition_penalty,
+                        split_pattern=args.split_pattern,
+                        use_lock=False,
+                    )
 
                 if part_files:
                     all_generated_files.extend(part_files)
@@ -357,13 +473,30 @@ def main():
                     logger.debug(
                         f"Submitting chunk {i} (base: {chunk_base_filename}) for TTS."
                     )
-                    future = executor.submit(
-                        tts_processor.text_to_speech,
-                        text=chunk_text,
-                        output_dir=args.output_dir,
-                        base_filename=chunk_base_filename,
-                        use_lock=True,
-                    )  # Critical: use lock in threaded mode
+                    if args.engine == "kokoro":
+                        future = executor.submit(
+                            tts_processor.text_to_speech,
+                            text=chunk_text,
+                            output_dir=args.output_dir,
+                            base_filename=chunk_base_filename,
+                            use_lock=True,
+                        )
+                    else:
+                        future = executor.submit(
+                            tts_processor.text_to_speech,
+                            text=chunk_text,
+                            output_dir=args.output_dir,
+                            base_filename=chunk_base_filename,
+                            audio_prompt_path=args.cb_audio_prompt,
+                            exaggeration=args.cb_exaggeration,
+                            cfg_weight=args.cb_cfg_weight,
+                            temperature=args.cb_temperature,
+                            top_p=args.cb_top_p,
+                            min_p=args.cb_min_p,
+                            repetition_penalty=args.cb_repetition_penalty,
+                            split_pattern=args.split_pattern,
+                            use_lock=True,
+                        )
                     future_to_chunk_info[future] = {
                         "id": i,
                         "name": chunk_base_filename,
@@ -394,24 +527,56 @@ def main():
                 logger.info(
                     f"Processing chunk {i} ({chunk_base_filename}) sequentially."
                 )
-                chunk_files = tts_processor.text_to_speech(
-                    text=chunk_text,
-                    output_dir=args.output_dir,
-                    base_filename=chunk_base_filename,
-                    use_lock=False,  # Main thread, only one operation at a time from this loop
-                )
+                if args.engine == "kokoro":
+                    chunk_files = tts_processor.text_to_speech(
+                        text=chunk_text,
+                        output_dir=args.output_dir,
+                        base_filename=chunk_base_filename,
+                        use_lock=False,
+                    )
+                else:
+                    chunk_files = tts_processor.text_to_speech(
+                        text=chunk_text,
+                        output_dir=args.output_dir,
+                        base_filename=chunk_base_filename,
+                        audio_prompt_path=args.cb_audio_prompt,
+                        exaggeration=args.cb_exaggeration,
+                        cfg_weight=args.cb_cfg_weight,
+                        temperature=args.cb_temperature,
+                        top_p=args.cb_top_p,
+                        min_p=args.cb_min_p,
+                        repetition_penalty=args.cb_repetition_penalty,
+                        split_pattern=args.split_pattern,
+                        use_lock=False,
+                    )
                 if chunk_files:
                     all_generated_files.extend(chunk_files)
 
     elif input_type == "direct_text":
         # Direct text input is processed as a single block, no chunking/threading here by default
         logger.info("Processing direct text input sequentially.")
-        generated_text_files = tts_processor.text_to_speech(
-            text=text_to_process,
-            output_dir=args.output_dir,
-            base_filename=base_filename,
-            use_lock=False,  # Main thread, single operation
-        )
+        if args.engine == "kokoro":
+            generated_text_files = tts_processor.text_to_speech(
+                text=text_to_process,
+                output_dir=args.output_dir,
+                base_filename=base_filename,
+                use_lock=False,
+            )
+        else:
+            generated_text_files = tts_processor.text_to_speech(
+                text=text_to_process,
+                output_dir=args.output_dir,
+                base_filename=base_filename,
+                audio_prompt_path=args.cb_audio_prompt,
+                exaggeration=args.cb_exaggeration,
+                cfg_weight=args.cb_cfg_weight,
+                temperature=args.cb_temperature,
+                top_p=args.cb_top_p,
+                min_p=args.cb_min_p,
+                repetition_penalty=args.cb_repetition_penalty,
+                split_pattern=args.split_pattern,
+                use_lock=False,
+            )
         if generated_text_files:
             all_generated_files.extend(generated_text_files)
 
