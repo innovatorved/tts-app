@@ -105,6 +105,7 @@ python main.py [OPTIONS]
     ```
 
 3.  **Chatterbox TTS (English, with optional voice prompt and emotion control):**
+
         ```bash
         python main.py --engine chatterbox \
             --text "This is Chatterbox speaking with expressive control." \
