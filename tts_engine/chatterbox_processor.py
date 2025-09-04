@@ -3,6 +3,7 @@ import os
 import re
 import threading
 from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import soundfile as sf
 
@@ -15,6 +16,7 @@ except Exception as _e:  # noqa: N816
     torch = None
 
 from utils.file_handler import ensure_dir_exists, get_safe_filename
+from utils.split_text import smart_split_text
 
 logger = logging.getLogger(__name__)
 
@@ -100,35 +102,19 @@ class ChatterboxTTSProcessor:
             self.default_split_pattern = split_pattern
 
     def _split_text(self, text: str, split_pattern: str) -> List[str]:
-        if not text or not text.strip():
-            return []
-        # Ensure we retain sentence-ending punctuation where possible by splitting on lookbehind
-        # Use the provided split pattern as-is for compatibility with existing CLI
-        try:
-            parts = re.split(split_pattern, text)
-            # re.split drops the delimiter; we don't re-attach punctuation here as the model normalizes
-        except re.error:
-            # Fallback: split on double newlines or sentence enders followed by space
-            parts = re.split(r"\n\n+|[.!?]\s", text)
-        # Clean and filter
-        cleaned = [p.strip() for p in parts if p and p.strip()]
-        return cleaned if cleaned else ([text.strip()] if text.strip() else [])
+        # Use smart splitting instead of regex splitting
+        return smart_split_text(text, split_pattern)
 
     def _generate_segment(
         self,
-        text: str,
-        output_dir: str,
-        base_filename: str,
-        segment_idx: int,
-        *,
-        audio_prompt_path: Optional[str],
-        exaggeration: float,
-        cfg_weight: float,
-        temperature: float,
-        top_p: float,
-        min_p: float,
-        repetition_penalty: float,
+        segment_data: tuple,
     ) -> Optional[str]:
+        """
+        Generate audio for a single segment. Designed for parallel execution.
+        segment_data: (text, output_dir, base_filename, segment_idx, audio_prompt_path, exaggeration, cfg_weight, temperature, top_p, min_p, repetition_penalty)
+        """
+        text, output_dir, base_filename, segment_idx, audio_prompt_path, exaggeration, cfg_weight, temperature, top_p, min_p, repetition_penalty = segment_data
+        
         try:
             wav = self.model.generate(
                 text,
@@ -182,6 +168,13 @@ class ChatterboxTTSProcessor:
         curr_rep = self.default_repetition_penalty if repetition_penalty is None else float(repetition_penalty)
         curr_split_pattern = self.default_split_pattern if split_pattern is None else split_pattern
 
+        # Enforce audio prompt requirement for Chatterbox
+        if curr_prompt is None:
+            logger.error(
+                "Chatterbox requires a reference audio_prompt_path (WAV/MP3/FLAC). Provide one to proceed."
+            )
+            return []
+
         segments = self._split_text(text, curr_split_pattern)
         if not segments:
             logger.warning(f"No text to synthesize for '{base_filename}'.")
@@ -191,22 +184,31 @@ class ChatterboxTTSProcessor:
 
         def _run() -> List[str]:
             local_out: List[str] = []
+            
+            # For parallel processing, we'll use ThreadPoolExecutor instead of ProcessPoolExecutor
+            # since the model object can't be pickled for process-based parallelism
+            from concurrent.futures import ThreadPoolExecutor
+            
+            # Prepare segment data for parallel processing
+            segment_data_list = []
             for i, seg in enumerate(segments):
-                fpath = self._generate_segment(
-                    seg,
-                    output_dir,
-                    base_filename,
-                    i,
-                    audio_prompt_path=curr_prompt,
-                    exaggeration=curr_exaggeration,
-                    cfg_weight=curr_cfg_weight,
-                    temperature=curr_temperature,
-                    top_p=curr_top_p,
-                    min_p=curr_min_p,
-                    repetition_penalty=curr_rep,
+                segment_data = (
+                    seg, output_dir, base_filename, i,
+                    curr_prompt, curr_exaggeration, curr_cfg_weight,
+                    curr_temperature, curr_top_p, curr_min_p, curr_rep
                 )
-                if fpath:
-                    local_out.append(fpath)
+                segment_data_list.append(segment_data)
+            
+            # Use ThreadPoolExecutor for parallel processing
+            with ThreadPoolExecutor(max_workers=min(len(segment_data_list), 4)) as executor:
+                futures = [executor.submit(self._generate_segment, data) for data in segment_data_list]
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        local_out.append(result)
+            
+            # Sort by segment index to maintain order
+            local_out.sort(key=lambda x: int(re.search(r'_segment_(\d+)\.wav', x).group(1)))
             return local_out
 
         if use_lock:

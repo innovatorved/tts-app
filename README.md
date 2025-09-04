@@ -83,6 +83,33 @@ It can process direct text input, extract text from PDF files for narration, or 
     ```
     Update `requirements.txt` accordingly if you plan to use these languages frequently.
 
+## Web UI
+
+The application now includes a modern web interface built with Gradio that provides all CLI functionality in an easy-to-use graphical interface.
+
+### Running the Web UI
+
+```bash
+python webui.py
+```
+
+The web UI will be available at `http://localhost:7860` and includes:
+
+- **Text Input Tab**: Convert direct text to speech
+- **File Input Tab**: Process PDF or text files
+- **Conversation Tab**: Handle conversations with different voices for speakers
+
+### Features in Web UI
+
+- All TTS engine options (Kokoro and Chatterbox)
+- Voice selection and customization
+- Speed control
+- Device selection (CPU/CUDA/MPS)
+- Output directory configuration
+- Audio merging options
+- Real-time audio playback
+- Progress tracking
+
 ## Usage
 
 The application is run from the command line from the repo root. Default engine is Kokoro; pass `--engine chatterbox` to switch.
