@@ -6,6 +6,7 @@ import os
 import threading
 
 from utils.file_handler import ensure_dir_exists, get_safe_filename
+from utils.split_text import smart_split_text
 
 logger = logging.getLogger(__name__)
 
@@ -99,6 +100,12 @@ class KokoroTTSProcessor:
             )
             return []
 
+        # Apply smart splitting
+        segments = smart_split_text(text, split_pattern)
+        if not segments:
+            logger.warning(f"No segments to process for '{base_filename}'.")
+            return []
+
         ensure_dir_exists(output_dir)
         safe_base_filename = get_safe_filename(base_filename)
 
@@ -106,49 +113,50 @@ class KokoroTTSProcessor:
         logger.info(
             f"Thread {threading.get_ident()}: Starting TTS for '{safe_base_filename}', voice='{voice}', speed={speed}."
         )
-        # logger.debug(f"Input text snippet for '{safe_base_filename}': '{text[:100]}...'")
-        # logger.debug(f"Using split pattern: '{split_pattern}'")
 
-        try:
-            generator = self.pipeline(
-                text, voice=voice, speed=speed, split_pattern=split_pattern
-            )
-
-            for i, (graphemes, phonemes, audio_data) in enumerate(generator):
-                # Segment filename now includes chunk info (from base_filename) and segment index
-                output_path = os.path.join(
-                    output_dir, f"{safe_base_filename}_segment_{i:03d}.wav"
+        segment_index = 0
+        for segment in segments:
+            try:
+                generator = self.pipeline(
+                    segment, voice=voice, speed=speed, split_pattern=r"(?!.*)"  # Disable internal splitting
                 )
-                try:
-                    sf.write(output_path, audio_data, 24000)
-                    generated_files.append(output_path)
-                    logger.info(
-                        f"Thread {threading.get_ident()}: Saved audio segment: {output_path}"
+
+                for i, (graphemes, phonemes, audio_data) in enumerate(generator):
+                    # Segment filename now includes chunk info (from base_filename) and segment index
+                    output_path = os.path.join(
+                        output_dir, f"{safe_base_filename}_segment_{segment_index:03d}.wav"
                     )
-                    # logger.debug(f"Segment {i}: Graphemes: '{graphemes[:50]}...', Phonemes: '{phonemes[:50]}...'")
-                except Exception as e:
+                    try:
+                        sf.write(output_path, audio_data, 24000)
+                        generated_files.append(output_path)
+                        logger.info(
+                            f"Thread {threading.get_ident()}: Saved audio segment: {output_path}"
+                        )
+                        segment_index += 1
+                    except Exception as e:
+                        logger.error(
+                            f"Thread {threading.get_ident()}: Error writing audio file {output_path}: {e}"
+                        )
+
+            except RuntimeError as e:
+                if "espeak" in str(e).lower():
                     logger.error(
-                        f"Thread {threading.get_ident()}: Error writing audio file {output_path}: {e}"
+                        f"Thread {threading.get_ident()}: RuntimeError related to espeak for '{safe_base_filename}': {e}"
                     )
-
-            if not generated_files:
-                logger.warning(
-                    f"Thread {threading.get_ident()}: No audio segments were generated for '{safe_base_filename}'. The input text might be too short or result in no processable chunks with the current split_pattern."
-                )
-
-        except RuntimeError as e:
-            if "espeak" in str(e).lower():
+                else:
+                    logger.error(
+                        f"Thread {threading.get_ident()}: An unexpected RuntimeError occurred during TTS for '{safe_base_filename}': {e}"
+                    )
+            except Exception as e:
                 logger.error(
-                    f"Thread {threading.get_ident()}: RuntimeError related to espeak for '{safe_base_filename}': {e}"
+                    f"Thread {threading.get_ident()}: An unexpected error occurred during TTS for '{safe_base_filename}': {e}"
                 )
-            else:
-                logger.error(
-                    f"Thread {threading.get_ident()}: An unexpected RuntimeError occurred during TTS for '{safe_base_filename}': {e}"
-                )
-        except Exception as e:
-            logger.error(
-                f"Thread {threading.get_ident()}: An unexpected error occurred during TTS for '{safe_base_filename}': {e}"
+
+        if not generated_files:
+            logger.warning(
+                f"Thread {threading.get_ident()}: No audio segments were generated for '{safe_base_filename}'. The input text might be too short or result in no processable chunks with the current split_pattern."
             )
+
         return generated_files
 
     def text_to_speech(
