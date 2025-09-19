@@ -2,6 +2,7 @@ import argparse
 import logging
 import os
 import sys
+import glob
 from datetime import datetime
 from pathlib import Path
 import time
@@ -181,21 +182,24 @@ def main():
             job_data = db.get_job_by_name(db_conn, job_to_process)
             if job_data and job_data['merge_output']:
                 logger.info("Merging audio files...")
-                all_chunks = db.get_chunks_for_job(db_conn, job_id)
-                audio_files = [chunk['audio_file_path'] for chunk in all_chunks if chunk['status'] == 'completed' and chunk['audio_file_path']]
-
-                if audio_files:
-                    sorted_files = natsort.natsorted(audio_files)
+                # Collect ALL segment files generated for this job across all chunks.
+                # Each chunk may produce multiple segment WAV files with pattern: {job_name}_chunk_XXXX_segment_YYY.wav
+                pattern = os.path.join(job_data['output_dir'], f"{job_to_process}_chunk_*_segment_*.wav")
+                segment_files = glob.glob(pattern)
+                if not segment_files:
+                    logger.warning("No segment audio files found for merging (pattern: %s).", pattern)
+                else:
+                    # Natural sort to ensure correct chronological ordering
+                    sorted_files = natsort.natsorted(segment_files)
+                    print(sorted_files)
                     merged_filename = f"{job_to_process}_merged.wav"
                     merged_output_path = os.path.join(job_data['output_dir'], merged_filename)
-
+                    logger.info(f"Merging {len(sorted_files)} segment files into {merged_output_path}")
                     success = merge_audio_files(sorted_files, merged_output_path)
                     if success:
-                        logger.info(f"Successfully merged audio into {merged_output_path}")
+                        logger.info(f"Successfully merged {len(sorted_files)} segments into {merged_output_path}")
                     else:
-                        logger.error("Failed to merge audio files.")
-                else:
-                    logger.warning("No audio files found to merge.")
+                        logger.error("Failed to merge audio files (see previous errors).")
 
         else:
             logger.warning(f"Job '{job_to_process}' finished with incomplete or failed chunks.")

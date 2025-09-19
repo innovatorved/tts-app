@@ -101,11 +101,26 @@ def create_chunks(conn, job_id, text_chunks):
     sql = ''' INSERT INTO chunks(job_id, chunk_index, text)
               VALUES(?,?,?) '''
     try:
+        if not text_chunks:
+            logger.warning(f"No chunks supplied for job ID {job_id}; nothing to insert.")
+            return
+
+        # Filter out empty / whitespace-only chunks proactively
+        filtered = [c.strip() for c in text_chunks if c and c.strip()]
+        skipped = len(text_chunks) - len(filtered)
+        if skipped:
+            logger.info(f"Skipped {skipped} empty/blank chunk(s) for job ID {job_id}.")
+
+        if not filtered:
+            logger.warning(f"All provided chunks were empty for job ID {job_id}; nothing inserted.")
+            return
+
         cursor = conn.cursor()
-        chunk_data = [(job_id, i, chunk) for i, chunk in enumerate(text_chunks)]
+        # Ensure contiguous chunk_index (0..n-1) after filtering
+        chunk_data = [(job_id, i, chunk) for i, chunk in enumerate(filtered)]
         cursor.executemany(sql, chunk_data)
         conn.commit()
-        logger.info(f"Successfully created {len(text_chunks)} chunks for job ID {job_id}.")
+        logger.info(f"Successfully created {len(filtered)} chunks for job ID {job_id} (skipped {skipped}).")
     except sqlite3.Error as e:
         logger.error(f"Error creating chunks: {e}")
 
