@@ -10,3 +10,4 @@ misaki[en]
 pydub
 natsort
 gradio
+pandas
