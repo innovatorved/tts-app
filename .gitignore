@@ -121,6 +121,7 @@ coverage.xml
 # Kokoro / Hugging Face cache files (these are usually stored outside the project,
 # but good to be aware if any local caching happens within the project dir)
 # .cache/
+tts_jobs.db
 
 # If you use tox
 .tox/
