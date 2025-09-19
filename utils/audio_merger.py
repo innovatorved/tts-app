@@ -4,6 +4,8 @@ import os
 
 logger = logging.getLogger(__name__)
 
+# Explicitly specify the path to ffmpeg if pydub has trouble finding it.
+AudioSegment.converter = "/usr/bin/ffmpeg"
 
 def merge_audio_files(audio_file_paths: list[str], output_merged_path: str) -> bool:
     """
