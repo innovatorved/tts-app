@@ -11,9 +11,32 @@ logger = logging.getLogger(__name__)
 
 
 class KokoroTTSProcessor:
+    """A thread-safe wrapper for the Kokoro Text-to-Speech (TTS) pipeline.
+
+    This class initializes and manages the Kokoro TTS engine, providing a
+    simplified interface for generating audio from text. It includes features
+    for device selection (CPU, CUDA, MPS), thread-safe audio generation, and
+    customizable voice and speed parameters.
+
+    Attributes:
+        lang_code (str): The language code used to initialize the pipeline.
+        device (str | None): The target compute device (e.g., 'cuda', 'mps').
+        pipeline (KPipeline | None): The underlying Kokoro pipeline instance.
+        tts_lock (threading.Lock): A lock to ensure thread-safe TTS operations.
+        default_voice (str): The default voice model to use for generation.
+        default_speed (float): The default speech speed multiplier.
+    """
+
     def __init__(self, lang_code: str = "a", device: str | None = None):
-        """
-        Initializes the Kokoro TTS pipeline.
+        """Initializes the KokoroTTSProcessor.
+
+        Sets up the configuration for the TTS pipeline and initializes it.
+
+        Args:
+            lang_code: The language code for Kokoro (e.g., 'a' for American
+                English). Defaults to "a".
+            device: The compute device to use ('cuda', 'mps', or None for auto).
+                Defaults to None.
         """
         self.lang_code = lang_code
         self.device = device
@@ -28,7 +51,16 @@ class KokoroTTSProcessor:
         self.default_speed: float = 1.0
 
     def _initialize_pipeline(self):
-        """Initializes or re-initializes the TTS pipeline."""
+        """Initializes or re-initializes the TTS pipeline.
+
+        Loads the Kokoro TTS model onto the specified device. It includes checks
+        for device availability and provides informative error messages if the
+        pipeline fails to load, which can happen if dependencies like 'espeak-ng'
+        are missing.
+
+        Raises:
+            Exception: If the pipeline fails to initialize for any reason.
+        """
         logger.info(
             f"Initializing Kokoro TTS pipeline for lang_code='{self.lang_code}' on device='{self.device or 'auto'}'..."
         )
@@ -66,11 +98,23 @@ class KokoroTTSProcessor:
             raise
 
     def lang_code_to_misaki_ext(self) -> str:
+        """Maps a Kokoro language code to its Misaki model extension.
+
+        Returns:
+            The Misaki model extension string (e.g., 'ja', 'zh').
+        """
         mapping = {"j": "ja", "z": "zh"}
         return mapping.get(self.lang_code, "en")
 
     def set_generation_params(self, voice: str, speed: float, split_pattern: str | None = None):
-        """Sets default generation parameters. split_pattern retained for backward compatibility (ignored)."""
+        """Sets the default parameters for audio generation.
+
+        Args:
+            voice: The name of the voice model to use.
+            speed: The speech speed multiplier (e.g., 1.0 is normal).
+            split_pattern: This argument is ignored and retained only for
+                backward compatibility. Text splitting is handled externally.
+        """
         self.default_voice = voice
         self.default_speed = speed
         logger.debug(
@@ -85,7 +129,25 @@ class KokoroTTSProcessor:
         voice: str,
         speed: float,
     ) -> list[str]:
-        """Core TTS generation logic for a SINGLE already-split text segment."""
+        """Core TTS generation logic for a single text segment.
+
+        This internal method handles the actual audio generation for a given
+        piece of text. It ensures the output directory exists and saves the
+        generated audio as a WAV file.
+
+        Args:
+            text: The text segment to convert to speech.
+            output_dir: The directory where the audio file will be saved.
+            base_filename: The desired name for the output file, without the
+                .wav extension.
+            voice: The voice model to use for this specific generation.
+            speed: The speech speed to use for this specific generation.
+
+        Returns:
+            A list containing the full path to the generated audio file if
+            successful, or an empty list if generation fails or the input
+            text is empty.
+        """
         if not self.pipeline:
             logger.error("TTS Pipeline not initialized. Cannot generate audio.")
             return []
@@ -129,9 +191,28 @@ class KokoroTTSProcessor:
         speed: float | None = None,
         use_lock: bool = True,
     ) -> list[str]:
-        """
-        Converts text to speech and saves audio files. Uses a lock for thread-safety if specified.
-    Input text is treated as a single pre-split segment; external code handles segmentation.
+        """Converts a text segment to speech and saves it as a WAV file.
+
+        This method serves as the main public interface for generating audio.
+        It handles parameter selection (using defaults if none are provided)
+        and ensures thread-safety by using a lock during the core generation
+        process. Text splitting is expected to be handled before calling this.
+
+        Args:
+            text: The pre-split text segment to convert.
+            output_dir: The directory to save the output audio file.
+            base_filename: The base name for the output file. Defaults to
+                "audio_segment".
+            voice: The specific voice to use. If None, the processor's default
+                voice is used.
+            speed: The specific speed to use. If None, the processor's default
+                speed is used.
+            use_lock: Whether to acquire the thread lock during generation.
+                Should be True when calling from multiple threads.
+
+        Returns:
+            A list containing the path to the generated audio file, or an
+            empty list on failure.
         """
         current_voice = voice if voice is not None else self.default_voice
         current_speed = speed if speed is not None else self.default_speed

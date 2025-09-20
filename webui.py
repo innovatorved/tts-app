@@ -29,7 +29,21 @@ logger = logging.getLogger(__name__)
 # ---
 
 def run_job_processing(job_name, num_workers):
-    """Synchronously runs the ProcessPoolExecutor for a given job."""
+    """Synchronously runs the ProcessPoolExecutor for a given job and waits for it to complete.
+
+    This function orchestrates the multiprocessing task, distributing the
+    `process_chunk_worker` function across a pool of workers. It waits for
+    all workers to finish and then updates the job's final status in the
+    database based on whether all chunks were processed successfully.
+
+    Args:
+        job_name: The unique name of the job to process.
+        num_workers: The number of parallel processes to spawn.
+
+    Returns:
+        True if the job completed successfully (all chunks processed),
+        False otherwise.
+    """
     db_conn = db.create_connection()
     if not db_conn:
         return False
@@ -62,7 +76,32 @@ def create_and_run_job(
     output_dir, engine, lang, voice, speed, device, merge_output,
     cb_audio_prompt, cb_exaggeration, cb_cfg_weight
 ):
-    """Handles job creation and execution for the Web UI."""
+    """Handles job creation and execution triggered by the Gradio Web UI.
+
+    This generator function performs the end-to-end process of creating and
+    running a TTS job. It yields status updates to the Gradio interface at
+    various stages.
+
+    Args:
+        file_obj: The uploaded file object from Gradio (PDF or TXT).
+        text_input: Text entered directly into the textbox.
+        num_workers: Number of parallel worker processes.
+        paragraphs_per_chunk: Number of paragraphs to group into one DB chunk.
+        output_dir: Directory to save audio files.
+        engine: The selected TTS engine ('kokoro' or 'chatterbox').
+        lang: Language code (for Kokoro).
+        voice: Voice model (for Kokoro).
+        speed: Speech speed.
+        device: Compute device ('cpu', 'cuda', 'mps').
+        merge_output: Boolean, whether to merge final audio.
+        cb_audio_prompt: Reference audio file for Chatterbox.
+        cb_exaggeration: Exaggeration parameter for Chatterbox.
+        cb_cfg_weight: CFG weight for Chatterbox.
+
+    Yields:
+        A tuple of Gradio updates for the status box, audio output, and
+        button states.
+    """
     db_conn = db.create_connection()
     if not db_conn:
         yield "Error: Could not connect to the database.", None, gr.update(interactive=True), gr.update(interactive=True)
@@ -119,8 +158,9 @@ def create_and_run_job(
         if job_successful:
             job_data = db.get_job_by_name(db_conn, job_name)
             if job_data['merge_output']:
-                all_chunks = db.get_chunks_for_job(db_conn, job_id)
-                audio_files = [c['audio_file_path'] for c in all_chunks if c['status'] == 'completed' and c['audio_file_path']]
+                # We must regather all segment files from the filesystem, as the DB only stores one representative path per chunk
+                pattern = os.path.join(job_data['output_dir'], f"{job_name}_chunk_*_segment_*.wav")
+                audio_files = glob.glob(pattern)
                 if audio_files:
                     sorted_files = natsort.natsorted(audio_files)
                     merged_filename = f"{job_name}_merged.wav"
@@ -139,7 +179,12 @@ def create_and_run_job(
         db_conn.close()
 
 def get_jobs_df():
-    """Fetches all jobs from the database for display."""
+    """Fetches all jobs from the database and formats them for display in a DataFrame.
+
+    Returns:
+        A pandas.DataFrame containing the list of all jobs, with columns
+        renamed for presentation.
+    """
     db_conn = db.create_connection()
     if not db_conn:
         return pd.DataFrame()
@@ -154,6 +199,16 @@ def get_jobs_df():
         db_conn.close()
 
 def create_ui():
+    """Builds and configures the entire Gradio user interface.
+
+    This function defines the layout of the web UI, including tabs for creating
+    jobs and viewing the dashboard. It also sets up all the event handlers
+    (e.g., button clicks, dropdown changes) that connect the UI components
+    to the backend logic.
+
+    Returns:
+        A Gradio Blocks interface object.
+    """
     with gr.Blocks(title="TTS App - Advanced", theme=gr.themes.Monochrome()) as interface:
         gr.Markdown("# 🎵 TTS: Scalable Text-to-Speech")
         
@@ -174,7 +229,7 @@ def create_ui():
                                 speed = gr.Slider(label="Speed", minimum=0.5, maximum=2.0, value=1.0)
 
                             with gr.Group(visible=False) as chatterbox_settings:
-                                cb_audio_prompt = gr.File(label="Reference Audio (Chatterbox)", file_types=[".wav"])
+                                cb_audio_prompt = gr.File(label="Reference Audio (Chatterbox)", file_types=[".wav", ".mp3", ".flac"])
                                 cb_exaggeration = gr.Slider(label="Exaggeration", minimum=0, maximum=2, value=0.5)
                                 cb_cfg_weight = gr.Slider(label="CFG Weight", minimum=0, maximum=2, value=0.5)
 
@@ -194,6 +249,7 @@ def create_ui():
 
         # --- Event Handlers ---
         def toggle_engine_settings(engine_choice):
+            """Callback to show/hide engine-specific settings."""
             if engine_choice == "kokoro":
                 return gr.update(visible=True), gr.update(visible=False)
             else:

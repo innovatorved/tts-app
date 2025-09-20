@@ -4,14 +4,19 @@ logger = logging.getLogger(__name__)
 
 
 def extract_text_from_txt(txt_path: str) -> str | None:
-    """
-    Reads text content from a plain text file.
+    """Reads and returns the content of a plain text file.
+
+    This function attempts to read a text file using UTF-8 encoding. If a
+    `UnicodeDecodeError` occurs, it falls back and tries to read the file
+    again using 'latin-1' encoding, which is more permissive.
 
     Args:
-        txt_path: Path to the .txt file.
+        txt_path: The local filesystem path to the .txt file.
 
     Returns:
-        A string containing all text from the file, or None if an error occurs.
+        A string containing the entire content of the file.
+        Returns None if the file cannot be found or if an error occurs
+        during reading, even with the fallback encoding.
     """
     try:
         logger.info(f"Attempting to open text file: {txt_path}")

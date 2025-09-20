@@ -5,14 +5,23 @@ logger = logging.getLogger(__name__)
 
 
 def extract_text_from_pdf(pdf_path: str) -> str | None:
-    """
-    Extracts text from all pages of a PDF file.
+    """Extracts all text content from a given PDF file.
+
+    This function opens a PDF, iterates through all its pages, and extracts the
+    text from each one. It then concatenates the text from all pages into a
+    single string.
+
+    Note:
+        This function works best with text-based PDFs. It cannot extract text
+        from scanned documents or images embedded in the PDF.
 
     Args:
-        pdf_path: Path to the PDF file.
+        pdf_path: The local filesystem path to the PDF file.
 
     Returns:
-        A string containing all extracted text, or None if an error occurs.
+        A string containing the concatenated text from all pages of the PDF.
+        Returns None if the file is not found, cannot be read (e.g., it is
+        corrupted or password-protected), or if another error occurs.
     """
     try:
         logger.info(f"Attempting to open PDF: {pdf_path}")

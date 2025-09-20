@@ -5,7 +5,18 @@ from datetime import datetime
 logger = logging.getLogger(__name__)
 
 def create_connection(db_file="tts_jobs.db"):
-    """Create a database connection to a SQLite database."""
+    """Creates and returns a connection to a SQLite database.
+
+    This function establishes a connection to the SQLite database file specified.
+    It is configured to be thread-safe by setting `check_same_thread=False`.
+
+    Args:
+        db_file: The path to the SQLite database file. Defaults to
+            "tts_jobs.db".
+
+    Returns:
+        A sqlite3.Connection object or None if the connection fails.
+    """
     conn = None
     try:
         conn = sqlite3.connect(db_file, check_same_thread=False)
@@ -15,7 +26,11 @@ def create_connection(db_file="tts_jobs.db"):
     return conn
 
 def create_tables(conn):
-    """Create the necessary tables if they don't exist."""
+    """Creates the 'jobs' and 'chunks' tables in the database if they don't exist.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+    """
     try:
         cursor = conn.cursor()
         cursor.execute("""
@@ -63,7 +78,33 @@ def create_tables(conn):
 def create_job(conn, job_name, input_file, output_dir, engine, lang, voice, speed, device, merge_output,
                cb_audio_prompt=None, cb_exaggeration=None, cb_cfg_weight=None, cb_temperature=None,
                cb_top_p=None, cb_min_p=None, cb_repetition_penalty=None):
-    """Create a new job in the jobs table."""
+    """Creates a new job record in the 'jobs' table.
+
+    If a job with the same `job_name` already exists, it does not create a
+    new one but returns the ID of the existing job.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+        job_name: A unique name for the job.
+        input_file: Path to the source file (PDF, TXT, etc.).
+        output_dir: Directory to save the final audio.
+        engine: The TTS engine to use ('kokoro' or 'chatterbox').
+        lang: Language code for the TTS engine.
+        voice: Voice model name.
+        speed: Speech speed multiplier.
+        device: The compute device to use.
+        merge_output: Boolean flag to merge audio chunks.
+        cb_audio_prompt: Path to reference audio for Chatterbox.
+        cb_exaggeration: Exaggeration parameter for Chatterbox.
+        cb_cfg_weight: CFG weight for Chatterbox.
+        cb_temperature: Temperature for Chatterbox.
+        cb_top_p: Top-p sampling for Chatterbox.
+        cb_min_p: Min-p sampling for Chatterbox.
+        cb_repetition_penalty: Repetition penalty for Chatterbox.
+
+    Returns:
+        The integer ID of the newly created or existing job, or None on error.
+    """
     sql = ''' INSERT INTO jobs(job_name, input_file, output_dir, engine, lang, voice, speed, device, merge_output,
                                cb_audio_prompt, cb_exaggeration, cb_cfg_weight, cb_temperature,
                                cb_top_p, cb_min_p, cb_repetition_penalty)
@@ -85,7 +126,15 @@ def create_job(conn, job_name, input_file, output_dir, engine, lang, voice, spee
         return None
 
 def get_job_by_name(conn, job_name):
-    """Retrieve a job by its name."""
+    """Retrieves a single job record by its unique name.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+        job_name: The name of the job to retrieve.
+
+    Returns:
+        A dictionary representing the job record, or None if not found or on error.
+    """
     try:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -97,7 +146,15 @@ def get_job_by_name(conn, job_name):
         return None
 
 def create_chunks(conn, job_id, text_chunks):
-    """Create chunks for a given job."""
+    """Creates multiple chunk records for a given job in a single transaction.
+
+    Empty or whitespace-only chunks in the input list are automatically skipped.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+        job_id: The ID of the parent job.
+        text_chunks: A list of strings, where each string is the text for a chunk.
+    """
     sql = ''' INSERT INTO chunks(job_id, chunk_index, text)
               VALUES(?,?,?) '''
     try:
@@ -125,7 +182,16 @@ def create_chunks(conn, job_id, text_chunks):
         logger.error(f"Error creating chunks: {e}")
 
 def get_pending_chunk(conn, job_id):
-    """Get a single pending chunk to process."""
+    """Retrieves the next available chunk with 'pending' status for a job.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+        job_id: The ID of the job to fetch a chunk from.
+
+    Returns:
+        A dictionary representing the chunk record, or None if no pending chunks
+        are found or an error occurs.
+    """
     sql = "SELECT * FROM chunks WHERE job_id = ? AND status = 'pending' ORDER BY chunk_index ASC LIMIT 1"
     try:
         conn.row_factory = sqlite3.Row
@@ -138,7 +204,19 @@ def get_pending_chunk(conn, job_id):
         return None
 
 def claim_chunk(conn, job_id):
-    """Atomically claim a pending chunk for processing."""
+    """Atomically retrieves a pending chunk and updates its status to 'processing'.
+
+    This function ensures that in a multi-worker setup, a single chunk is
+    claimed by only one worker.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+        job_id: The ID of the job from which to claim a chunk.
+
+    Returns:
+        A dictionary representing the claimed chunk, or None if no pending
+        chunks are available or an error occurs.
+    """
     with conn: # Using 'with conn' ensures the transaction is handled correctly
         try:
             cursor = conn.cursor()
@@ -152,8 +230,8 @@ def claim_chunk(conn, job_id):
                 cursor.execute("UPDATE chunks SET status = 'processing' WHERE id = ?", (chunk_id,))
 
                 # Retrieve the full chunk data
-                cursor.execute("SELECT * FROM chunks WHERE id = ?", (chunk_id,))
                 conn.row_factory = sqlite3.Row
+                cursor.execute("SELECT * FROM chunks WHERE id = ?", (chunk_id,))
                 chunk_row = cursor.fetchone()
                 return dict(chunk_row) if chunk_row else None
             else:
@@ -163,7 +241,14 @@ def claim_chunk(conn, job_id):
             return None
 
 def update_chunk_status(conn, chunk_id, status, audio_file_path=None):
-    """Update the status of a chunk."""
+    """Updates the status and audio file path of a specific chunk.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+        chunk_id: The ID of the chunk to update.
+        status: The new status string (e.g., 'completed', 'failed').
+        audio_file_path: The path to the generated audio file. Defaults to None.
+    """
     sql = "UPDATE chunks SET status = ?, audio_file_path = ? WHERE id = ?"
     try:
         cursor = conn.cursor()
@@ -173,7 +258,13 @@ def update_chunk_status(conn, chunk_id, status, audio_file_path=None):
         logger.error(f"Error updating chunk status: {e}")
 
 def update_job_status(conn, job_id, status):
-    """Update the status of a job."""
+    """Updates the status of a specific job.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+        job_id: The ID of the job to update.
+        status: The new status string (e.g., 'processing', 'completed').
+    """
     sql = "UPDATE jobs SET status = ? WHERE id = ?"
     try:
         cursor = conn.cursor()
@@ -183,7 +274,16 @@ def update_job_status(conn, job_id, status):
         logger.error(f"Error updating job status: {e}")
 
 def get_chunks_for_job(conn, job_id):
-    """Retrieve all chunks for a given job, ordered by index."""
+    """Retrieves all chunks associated with a given job, ordered by index.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+        job_id: The ID of the job.
+
+    Returns:
+        A list of dictionaries, where each dictionary represents a chunk.
+        Returns an empty list on error.
+    """
     try:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -195,7 +295,16 @@ def get_chunks_for_job(conn, job_id):
         return []
 
 def get_job_stats(conn, job_id):
-    """Get statistics for a given job."""
+    """Calculates statistics for a given job based on its chunk statuses.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+        job_id: The ID of the job.
+
+    Returns:
+        A dictionary with counts for each status (e.g., 'completed', 'pending')
+        and a 'total' count. Returns an empty dictionary on error.
+    """
     try:
         cursor = conn.cursor()
         cursor.execute("SELECT status, COUNT(*) FROM chunks WHERE job_id = ? GROUP BY status", (job_id,))
@@ -208,7 +317,15 @@ def get_job_stats(conn, job_id):
         return {}
 
 def get_all_jobs(conn):
-    """Retrieve all jobs from the database."""
+    """Retrieves a summary of all jobs from the database.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+
+    Returns:
+        A list of dictionaries, each representing a job summary, ordered by
+        creation date descending. Returns an empty list on error.
+    """
     try:
         conn.row_factory = sqlite3.Row
         cursor = conn.cursor()
@@ -220,7 +337,19 @@ def get_all_jobs(conn):
         return []
 
 def reset_failed_chunks(conn, job_id):
-    """Reset all 'failed' or 'processing' chunks to 'pending' for a job."""
+    """Resets chunks with 'failed' or 'processing' status back to 'pending'.
+
+    This is used for resuming jobs, allowing workers to retry chunks that
+    previously failed or were stuck in a 'processing' state (e.g., if a
+    worker crashed).
+
+    Args:
+        conn: An active sqlite3.Connection object.
+        job_id: The ID of the job whose chunks need resetting.
+
+    Returns:
+        The number of chunks that were updated.
+    """
     sql = "UPDATE chunks SET status = 'pending', retries = retries + 1 WHERE job_id = ? AND status IN ('failed', 'processing')"
     try:
         cursor = conn.cursor()
@@ -238,7 +367,7 @@ if __name__ == '__main__':
     db_conn = create_connection("tts_jobs_test.db")
     if db_conn:
         create_tables(db_conn)
-        job_id = create_job(db_conn, "test_job_1", "/path/to/file.txt", "/path/to/output", "kokoro", "a", "af_heart", 1.0, True)
+        job_id = create_job(db_conn, "test_job_1", "/path/to/file.txt", "/path/to/output", "kokoro", "a", "af_heart", 1.0, "cpu", True)
         if job_id:
             sample_chunks = ["This is the first sentence.", "This is the second.", "And a third."]
             create_chunks(db_conn, job_id, sample_chunks)

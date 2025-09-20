@@ -31,6 +31,25 @@ logger = logging.getLogger(__name__)
 # ---
 
 def main():
+    """The main command-line interface for the TTS application.
+
+    This function orchestrates the entire process based on command-line
+    arguments. It can operate in one of three main modes:
+    1.  **Create and Process:** If an input source (like --pdf or --text) is
+        provided, it creates a new job in the database, splits the input text
+        into chunks, and starts a pool of worker processes to convert the
+        chunks to audio.
+    2.  **Resume:** If the --resume flag is used with a --job-name, it resets
+        any failed or stuck chunks for that job and starts the worker pool to
+        continue processing.
+    3.  **Monitor:** If the --monitor flag is used with a --job-name, it
+        displays a live progress bar for the specified job without starting
+        any processing.
+
+    After processing is complete, if the --merge_output flag was used, it
+    collects all the generated audio segments for the job and merges them
+    into a single output file.
+    """
     parser = argparse.ArgumentParser(
         description="TTS: A scalable and reliable Text-to-Speech application."
     )
@@ -209,7 +228,16 @@ def main():
 
 
 def monitor_job(conn, job_name):
-    """Monitors the progress of a job."""
+    """Displays a live progress bar for a given job.
+
+    This function continuously queries the database for the job's statistics
+    (total, completed, failed chunks) and displays them in a dynamic progress
+    bar until the job is completed or has failed.
+
+    Args:
+        conn: An active sqlite3.Connection object.
+        job_name: The name of the job to monitor.
+    """
     job = db.get_job_by_name(conn, job_name)
     if not job:
         logger.error(f"No job found with name: {job_name}")
