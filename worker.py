@@ -2,6 +2,7 @@ import logging
 import os
 import database as db
 from utils.file_handler import ensure_dir_exists
+from utils.split_text import smart_split_text
 from utils.logger import setup_logging
 
 def process_chunk_worker(job_name: str) -> int:
@@ -31,7 +32,7 @@ def process_chunk_worker(job_name: str) -> int:
     try:
         if job_data['engine'] == 'kokoro':
             tts_processor = KokoroTTSProcessor(lang_code=job_data['lang'], device=job_data['device'])
-            tts_processor.set_generation_params(voice=job_data['voice'], speed=job_data['speed'], split_pattern=r"(?!.*)")
+            tts_processor.set_generation_params(voice=job_data['voice'], speed=job_data['speed'])
         elif job_data['engine'] == 'chatterbox':
             tts_processor = ChatterboxTTSProcessor(device=job_data['device'])
             tts_processor.set_generation_params(
@@ -42,7 +43,6 @@ def process_chunk_worker(job_name: str) -> int:
                 top_p=job_data['cb_top_p'],
                 min_p=job_data['cb_min_p'],
                 repetition_penalty=job_data['cb_repetition_penalty'],
-                split_pattern=r"(?!.*)"
             )
         else:
             worker_logger.warning(f"Worker for job '{job_name}': Engine '{job_data['engine']}' is not supported.")
@@ -66,21 +66,37 @@ def process_chunk_worker(job_name: str) -> int:
             ensure_dir_exists(job_data['output_dir'])
             base_filename = f"{job_name}_chunk_{chunk['chunk_index']:04d}"
 
-            audio_files = tts_processor.text_to_speech(
-                text=chunk['text'],
-                output_dir=job_data['output_dir'],
-                base_filename=base_filename,
-                use_lock=False
-            )
+            # External segmentation to avoid double splitting inside processors
+            # We keep a minimal split pattern to rely on smart_split_text defaults
+            segments = smart_split_text(chunk['text'])
+            if not segments:
+                worker_logger.warning(f"Worker {os.getpid()}: Chunk {chunk['chunk_index']} produced no segments after splitting.")
+                db.update_chunk_status(db_conn, chunk['id'], 'failed')
+                continue
 
-            if audio_files:
-                audio_file_path = audio_files[0]
-                db.update_chunk_status(db_conn, chunk['id'], 'completed', audio_file_path)
-                worker_logger.info(f"Worker {os.getpid()}: Successfully processed chunk {chunk['chunk_index']}.")
+            generated_files = []
+            for seg_idx, seg_text in enumerate(segments):
+                seg_base = f"{base_filename}_segment_{seg_idx:03d}"  # maintain compatibility with merger glob
+                # Pass pre_split=True so processor treats whole seg_text as single unit
+                audio_files = tts_processor.text_to_speech(
+                    text=seg_text,
+                    output_dir=job_data['output_dir'],
+                    base_filename=seg_base,
+                    use_lock=False,
+                )
+                if audio_files:
+                    generated_files.extend(audio_files)
+                else:
+                    worker_logger.warning(f"Worker {os.getpid()}: No audio returned for segment {seg_idx} of chunk {chunk['chunk_index']}.")
+
+            if generated_files:
+                # For database we record first file (others share naming pattern)
+                db.update_chunk_status(db_conn, chunk['id'], 'completed', generated_files[0])
+                worker_logger.info(f"Worker {os.getpid()}: Successfully processed chunk {chunk['chunk_index']} into {len(generated_files)} segment file(s).")
                 processed_count += 1
             else:
-                worker_logger.warning(f"Worker {os.getpid()}: TTS for chunk {chunk['chunk_index']} produced no audio.")
                 db.update_chunk_status(db_conn, chunk['id'], 'failed')
+                worker_logger.warning(f"Worker {os.getpid()}: All segments failed for chunk {chunk['chunk_index']}.")
 
         except Exception as e:
             worker_logger.error(f"Worker {os.getpid()}: Error processing chunk {chunk['chunk_index']}: {e}", exc_info=True)
