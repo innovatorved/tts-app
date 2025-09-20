@@ -6,9 +6,27 @@ from utils.split_text import smart_split_text
 from utils.logger import setup_logging
 
 def process_chunk_worker(job_name: str) -> int:
-    """
-    The main worker function that runs in a separate process.
-    It continuously fetches and processes chunks for a given job.
+    """The main worker function that runs in a separate process to handle TTS.
+
+    This function is designed to be executed by a process pool. It connects to
+    the database, retrieves the job details, and enters a loop to continuously
+    claim and process text chunks associated with the job.
+
+    Inside the loop, it performs the following steps for each chunk:
+    1. Claims a 'pending' chunk from the database, atomically setting its status
+       to 'processing'.
+    2. Initializes the appropriate TTS engine (Kokoro or Chatterbox).
+    3. Splits the chunk's text into smaller, manageable segments.
+    4. Calls the TTS engine to convert each segment into an audio file.
+    5. Updates the chunk's status to 'completed' or 'failed' in the database.
+
+    The function exits when no more 'pending' chunks are available for the job.
+
+    Args:
+        job_name: The unique name of the job this worker should process.
+
+    Returns:
+        The total number of chunks successfully processed by this worker instance.
     """
     # Re-initialize logging for the worker process
     setup_logging(main_process=False)

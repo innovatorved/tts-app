@@ -16,6 +16,30 @@ This application converts text, PDFs, or conversations into speech using Kokoro-
 - **Choice of Engines:** Use Kokoro (multilingual) for versatility or Chatterbox (English) for high-quality, expressive speech.
 - **Customizable Output:** Control language, voice, and speed. Final audio can be automatically merged into a single file.
 
+## Architecture Overview
+
+The application's resilience and scalability come from its core architecture, which revolves around a central database and parallel workers.
+
+1.  **SQLite Database (`tts_jobs.db`):** This is the heart of the system. It contains two main tables:
+    *   `jobs`: Stores high-level information about each conversion task (job name, input/output paths, TTS settings, overall status).
+    *   `chunks`: The input text for each job is divided into smaller text "chunks," and each chunk gets a row in this table. This allows for fine-grained tracking and processing.
+
+2.  **Main Script (`main.py` / `webui.py`):** This is the user's entry point. When a new job is created:
+    *   It parses the input file (e.g., a PDF) to extract the raw text.
+    *   It splits the raw text into larger chunks (based on paragraph count).
+    *   It creates a new record in the `jobs` table and populates the `chunks` table with all the text chunks, marking them as `pending`.
+
+3.  **Process Pool & Workers (`worker.py`):**
+    *   The main script launches a pool of worker processes (`ProcessPoolExecutor`). The number of workers is configurable.
+    *   Each worker runs the `process_chunk_worker` function. It connects to the database and enters a loop.
+    *   In the loop, it "claims" a `pending` chunk, atomically updating its status to `processing`. This ensures no two workers grab the same chunk.
+    *   The worker then performs the TTS conversion for that single chunk and saves the resulting audio file.
+    *   Finally, it updates the chunk's status to `completed` or `failed`. The worker then loops to claim the next available chunk.
+
+4.  **TTS Engines (`tts_engine/`):** The actual text-to-speech conversion is handled by processor classes that wrap the underlying TTS libraries (Kokoro or Chatterbox). These are initialized within each worker process.
+
+This design means that even if the application is stopped, the state of the job is preserved in the database. You can simply resume the job, and the workers will pick up right where they left off, processing any `pending` or `failed` chunks.
+
 ## Prerequisites
 
 1.  **Python:** Version 3.8 or higher.
@@ -69,7 +93,7 @@ The web UI will be available at `http://localhost:7860` and includes:
 
 ## Usage (Command Line)
 
-The new job-based system is powerful and easy to use. Here’s how to work with it.
+The job-based system is powerful and easy to use. Here’s how to work with it.
 
 ### 1. Creating a Job
 
@@ -117,7 +141,7 @@ python main.py --resume --job-name "my-book-job" --num-workers 4
 - `--text "YOUR TEXT"`: A string of text to convert.
 - `--pdf "PATH_TO_PDF"`: Path to a PDF file.
 - `--text_file "PATH_TO_TXT"`: Path to a plain text file.
-- `--conversation "PATH_TO_CONV_TXT"`: Path to a conversation file (Note: advanced conversation features are being refined in the new architecture).
+- `--conversation "PATH_TO_CONV_TXT"`: Path to a conversation file (Note: special conversation parsing is not yet fully integrated into the job system).
 
 ### Output & TTS Configuration
 - `--output_dir "path"`: Directory to save audio files (default: `./output_audio`).
@@ -135,6 +159,10 @@ python main.py --resume --job-name "my-book-job" --num-workers 4
 - `--cb_audio_prompt <path.wav>`: Path to a reference audio file to guide the voice.
 - `--cb_exaggeration <float>`: Emotion/intensity control (default: 0.5).
 - `--cb_cfg_weight <float>`: Guidance weight (default: 0.5).
+- `--cb_temperature <float>`: Sampling temperature (default: 0.8).
+- `--cb_top_p <float>`: Nucleus sampling `p` value (default: 1.0).
+- `--cb_min_p <float>`: Minimum `p` value for nucleus sampling (default: 0.05).
+- `--cb_repetition_penalty <float>`: Penalty for repeating tokens (default: 1.2).
 
 ### Other
 - `--verbose` or `-v`: Enable detailed debug logging.
@@ -145,3 +173,4 @@ python main.py --resume --job-name "my-book-job" --num-workers 4
 *   **`espeak-ng` not found:** Ensure `espeak-ng` is correctly installed and in your system's PATH.
 *   **`ffmpeg` not found:** The `--merge_output` feature requires FFmpeg. Ensure it is installed and accessible in your system's PATH.
 *   **PDF Parsing Issues:** The app uses `PyPDF2` and works best with text-based PDFs. Image-based (scanned) PDFs will not work.
+*   **Chatterbox Issues:** The Chatterbox engine requires the `chatterbox-tts` package. If you only plan to use Kokoro, this is not needed. To use Chatterbox, run `pip install chatterbox-tts`.

@@ -6,14 +6,22 @@ logger = logging.getLogger(__name__)
 
 
 def extract_conversation_from_text(text_content: str) -> List[Tuple[str, str]]:
-    """
-    Extracts conversation parts from text content.
+    """Extracts speaker-separated dialogue from a raw text string.
+
+    This function parses a string assuming it contains a script-like
+    conversation, with lines prefixed by "Man:" or "Woman:". It handles
+    variations in capitalization and collects multiline dialogue for each
+    speaker.
 
     Args:
-        text_content: String containing conversation text with "Man:" and "Woman:" prefixes.
+        text_content: A string containing the conversation. Expected format
+            has speaker cues like "Man:" or "Woman:" at the beginning of
+            their lines.
 
     Returns:
-        List of tuples containing (speaker_type, line_text)
+        A list of tuples, where each tuple contains the identified speaker
+        ('Man' or 'Woman') and their corresponding dialogue as a single string.
+        Returns an empty list if the input text is empty.
     """
     if not text_content or not text_content.strip():
         logger.warning("No text content provided for conversation extraction.")
@@ -71,15 +79,20 @@ def extract_conversation_from_text(text_content: str) -> List[Tuple[str, str]]:
 
 
 def get_voice_for_speaker(speaker: str, voice_config: Dict = None) -> str:
-    """
-    Returns appropriate voice model for the given speaker.
+    """Retrieves the appropriate voice model name for a given speaker.
+
+    This function maps a speaker identifier ('Man' or 'Woman') to a specific
+    voice model name compatible with the Kokoro TTS engine. It can use a
+    custom voice configuration or fall back to default voices.
 
     Args:
-        speaker: Speaker identifier ('Man' or 'Woman')
-        voice_config: Optional configuration with custom voice mappings
+        speaker: The identifier for the speaker (e.g., 'Man', 'Woman').
+        voice_config: An optional dictionary mapping speaker identifiers to
+            voice model names.
 
     Returns:
-        Voice model name suitable for the Kokoro TTS engine
+        The corresponding voice model name as a string. Defaults to a
+        female voice if the speaker is not found in the mapping.
     """
     # Use provided mapping or fallback to defaults
     if voice_config and speaker in voice_config:

@@ -19,18 +19,40 @@ logger = logging.getLogger(__name__)
 
 
 class ChatterboxTTSProcessor:
-    """
-    Processor that wraps ResembleAI Chatterbox TTS.
+    """A thread-safe wrapper for the Chatterbox Text-to-Speech (TTS) engine.
 
-    Notes:
-    - Chatterbox supports English currently.
-    - Voices are controlled via an optional audio_prompt_path and parameters like exaggeration/cfg_weight.
-    - We segment input text at a higher layer (worker) now to avoid duplicate splitting logic.
-    - "pre_split=True" in text_to_speech indicates the provided text is already a single segment.
-    - Removed previous internal ThreadPool usage to prevent resource contention and hanging.
+    This class manages the Chatterbox TTS model, providing an interface for
+    generating high-quality, expressive speech. It handles model initialization,
+    device auto-detection, and thread-safe audio generation. Voice cloning is
+    controlled via a reference audio prompt.
+
+    Attributes:
+        device (str): The compute device ('cuda', 'mps', or 'cpu').
+        model (_ChatterboxTTS | None): The loaded Chatterbox model instance.
+        tts_lock (threading.Lock): A lock for thread-safe TTS operations.
+        default_audio_prompt_path (str | None): Default path to the reference
+            audio file for voice cloning.
+        default_exaggeration (float): Default emotional intensity control.
+        default_cfg_weight (float): Default guidance weight.
+        default_temperature (float): Default sampling temperature.
+        default_top_p (float): Default nucleus sampling probability.
+        default_min_p (float): Default minimum nucleus sampling probability.
+        default_repetition_penalty (float): Default repetition penalty.
     """
 
     def __init__(self, device: Optional[str] = None):
+        """Initializes the ChatterboxTTSProcessor.
+
+        Checks for Chatterbox installation, auto-detects the best available
+        compute device, and loads the TTS model.
+
+        Args:
+            device: The compute device to use ('cuda', 'mps', or 'cpu'). If
+                None, it will be auto-detected.
+
+        Raises:
+            ImportError: If the 'chatterbox-tts' library is not installed.
+        """
         if _ChatterboxTTS is None:
             raise ImportError(
                 "chatterbox-tts is not installed. Please `pip install chatterbox-tts` to use this engine."
@@ -52,6 +74,12 @@ class ChatterboxTTSProcessor:
         self._initialize_model()
 
     def _autodetect_device(self) -> str:
+        """Auto-detects the best available torch device.
+
+        Returns:
+            A string ('cuda', 'mps', or 'cpu') representing the best
+            available device.
+        """
         try:
             if torch and torch.cuda.is_available():
                 return "cuda"
@@ -62,6 +90,11 @@ class ChatterboxTTSProcessor:
         return "cpu"
 
     def _initialize_model(self):
+        """Loads the Chatterbox TTS model from pretrained weights.
+
+        Raises:
+            Exception: If the model fails to load.
+        """
         logger.info(f"Initializing Chatterbox TTS on device='{self.device}'.")
         try:
             self.model = _ChatterboxTTS.from_pretrained(device=self.device)
@@ -81,6 +114,18 @@ class ChatterboxTTSProcessor:
         min_p: Optional[float] = None,
         repetition_penalty: Optional[float] = None,
     ) -> None:
+        """Sets the default parameters for audio generation.
+
+        Args:
+            audio_prompt_path: Path to a reference audio file (WAV/MP3/FLAC)
+                to guide the voice.
+            exaggeration: Emotion/intensity control (e.g., 0.5).
+            cfg_weight: Guidance weight (e.g., 0.5).
+            temperature: Sampling temperature for generation.
+            top_p: Nucleus sampling `p` value.
+            min_p: Minimum nucleus sampling `p` value.
+            repetition_penalty: Penalty for repeating tokens.
+        """
         if audio_prompt_path is not None:
             self.default_audio_prompt_path = audio_prompt_path
         if exaggeration is not None:
@@ -110,7 +155,26 @@ class ChatterboxTTSProcessor:
         min_p: float,
         repetition_penalty: float,
     ) -> Optional[str]:
-        """Generate audio for a SINGLE already-split segment and return path."""
+        """Generates audio for a single text segment and returns the file path.
+
+        This internal method performs the core TTS generation, saving the
+        resulting audio to a WAV file.
+
+        Args:
+            text: The text segment to convert to speech.
+            output_dir: The directory to save the audio file.
+            base_filename: The base name for the output file.
+            audio_prompt_path: Path to the reference audio for voice cloning.
+            exaggeration: Emotion/intensity control.
+            cfg_weight: Guidance weight.
+            temperature: Sampling temperature.
+            top_p: Nucleus sampling `p` value.
+            min_p: Minimum nucleus sampling `p` value.
+            repetition_penalty: Repetition penalty.
+
+        Returns:
+            The full path to the generated WAV file, or None if generation fails.
+        """
         if not text or not text.strip():
             logger.warning(f"Empty text for base '{base_filename}'. Skipping.")
             return None
@@ -152,6 +216,32 @@ class ChatterboxTTSProcessor:
         use_lock: bool = True,
         pre_split: bool = True,  # ignored; always single segment now
     ) -> List[str]:
+        """Converts a text segment to speech using the Chatterbox engine.
+
+        This is the main public method for audio generation. It resolves all
+        generation parameters (using defaults if not provided), ensures a
+        reference audio prompt is available, and performs the generation in a
+        thread-safe manner.
+
+        Args:
+            text: The pre-split text segment to convert.
+            output_dir: The directory to save the output audio file.
+            base_filename: The base name for the output file.
+            audio_prompt_path: Specific audio prompt to use for this call.
+            exaggeration: Specific exaggeration value for this call.
+            cfg_weight: Specific CFG weight for this call.
+            temperature: Specific temperature for this call.
+            top_p: Specific top_p for this call.
+            min_p: Specific min_p for this call.
+            repetition_penalty: Specific repetition penalty for this call.
+            use_lock: If True, uses a lock to ensure thread-safety.
+            pre_split: Ignored; retained for compatibility. Assumes text is
+                a single segment.
+
+        Returns:
+            A list containing the path to the generated audio file, or an
+            empty list on failure (e.g., model not initialized, no audio prompt).
+        """
         if not self.model:
             logger.error("Chatterbox model not initialized.")
             return []
