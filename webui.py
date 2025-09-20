@@ -10,6 +10,7 @@ import sys
 
 # Local imports
 import database as db
+from utils.logger import setup_logging
 from worker import process_chunk_worker
 from utils.pdf_parser import extract_text_from_pdf
 from utils.text_file_parser import extract_text_from_txt
@@ -23,7 +24,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 # --- Logging Setup ---
-logging.basicConfig(level=logging.INFO)
+setup_logging(main_process=True)
 logger = logging.getLogger(__name__)
 # ---
 
