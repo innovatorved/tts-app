@@ -5,10 +5,22 @@ logger = logging.getLogger(__name__)
 
 
 def smart_split_text(text: str, split_pattern: str = r"\n\n+|\r\n\r\n+|\n\s*\n+|[.!?]\s") -> list[str]:
-    """
-    Intelligently splits text into segments for TTS.
-    If text is short (less than 5 lines or 500 characters), returns as single segment.
-    Otherwise, splits using the provided pattern.
+    """Intelligently splits a text into smaller, coherent segments for TTS.
+
+    This function first checks if the text is short (based on line or character
+    count) and, if so, returns it as a single segment to preserve context. For
+    longer texts, it uses a regex pattern to split the text into parts, cleans
+    them, and then merges very short segments to avoid creating choppy audio.
+
+    Args:
+        text: The input string to be split.
+        split_pattern: A regular expression pattern used to split the text.
+            Defaults to a pattern that splits by paragraph breaks or sentence
+            endings.
+
+    Returns:
+        A list of strings, where each string is a segment of the original
+        text. Returns an empty list if the input text is empty.
     """
     if not text or not text.strip():
         return []
@@ -54,7 +66,23 @@ def smart_split_text(text: str, split_pattern: str = r"\n\n+|\r\n\r\n+|\n\s*\n+|
 def split_text_into_chunks(
     full_text: str, max_paragraphs_per_chunk: int = 30
 ) -> list[str]:
-    """Splits text into larger chunks based on paragraph count."""
+    """Divides a large body of text into manageable chunks based on paragraphs.
+
+    This function is designed to break down a very large text (e.g., a book)
+    into smaller, processable chunks before finer splitting. It identifies
+    paragraphs and groups them into chunks, with each chunk containing a
+    specified maximum number of paragraphs.
+
+    Args:
+        full_text: The entire text content to be divided.
+        max_paragraphs_per_chunk: The maximum number of paragraphs to include
+            in a single chunk.
+
+    Returns:
+        A list of strings, where each string is a chunk of the original text
+        containing one or more paragraphs. Returns an empty list if the input
+        text is empty.
+    """
     if not full_text or not full_text.strip():
         return []
 

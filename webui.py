@@ -1,506 +1,292 @@
 import gradio as gr
 import os
-import tempfile
 import logging
 from pathlib import Path
-from typing import Optional, List
+from datetime import datetime
+from concurrent.futures import ProcessPoolExecutor, as_completed
+import natsort
+import pandas as pd
+import sys
 
-# Import our TTS modules
-from tts_engine.processor import KokoroTTSProcessor
-from tts_engine.chatterbox_processor import ChatterboxTTSProcessor
+# Local imports
+import database as db
+from utils.logger import setup_logging
+from worker import process_chunk_worker
 from utils.pdf_parser import extract_text_from_pdf
-from utils.file_handler import ensure_dir_exists
 from utils.text_file_parser import extract_text_from_txt
-from utils.audio_merger import merge_audio_files
-from utils.conversation_parser import (
-    extract_conversation_from_text,
-    get_voice_for_speaker,
-)
 from utils.split_text import split_text_into_chunks
+from utils.audio_merger import merge_audio_files
+from utils.file_handler import ensure_dir_exists
 
-# Setup logging
-logging.basicConfig(level=logging.INFO)
+# Adjust path to import from sibling directories
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+# --- Logging Setup ---
+setup_logging(main_process=True)
 logger = logging.getLogger(__name__)
+# ---
 
-class TTSWebUI:
-    def __init__(self):
-        self.kokoro_processor = None
-        self.chatterbox_processor = None
-        self.temp_dir = tempfile.mkdtemp()
-        
-    def initialize_processors(self, engine: str, device: str = None):
-        """Initialize TTS processors based on selected engine."""
-        try:
-            if engine == "kokoro":
-                if self.kokoro_processor is None:
-                    self.kokoro_processor = KokoroTTSProcessor(device=device)
-                return "Kokoro processor initialized successfully!"
-            elif engine == "chatterbox":
-                if self.chatterbox_processor is None:
-                    self.chatterbox_processor = ChatterboxTTSProcessor(device=device)
-                return "Chatterbox processor initialized successfully!"
-        except Exception as e:
-            return f"Error initializing {engine} processor: {str(e)}"
+def run_job_processing(job_name, num_workers):
+    """Synchronously runs the ProcessPoolExecutor for a given job and waits for it to complete.
+
+    This function orchestrates the multiprocessing task, distributing the
+    `process_chunk_worker` function across a pool of workers. It waits for
+    all workers to finish and then updates the job's final status in the
+    database based on whether all chunks were processed successfully.
+
+    Args:
+        job_name: The unique name of the job to process.
+        num_workers: The number of parallel processes to spawn.
+
+    Returns:
+        True if the job completed successfully (all chunks processed),
+        False otherwise.
+    """
+    db_conn = db.create_connection()
+    if not db_conn:
+        return False
     
-    def process_text_input(self, 
-                          text: str, 
-                          engine: str,
-                          output_dir: str,
-                          lang: str = "a",
-                          voice: str = "af_heart",
-                          speed: float = 1.0,
-                          device: str = None,
-                          merge_output: bool = False,
-                          audio_prompt_path: str = None) -> tuple:
-        """Process direct text input."""
-        if not text.strip():
-            return "Please enter some text to convert.", None
+    try:
+        logger.info(f"Starting ProcessPoolExecutor with {num_workers} workers for job '{job_name}'.")
+        job_id = db.get_job_by_name(db_conn, job_name)['id']
+        db.update_job_status(db_conn, job_id, 'processing')
         
-        try:
-            # Initialize processor
-            init_msg = self.initialize_processors(engine, device)
-            if "Error" in init_msg:
-                return init_msg, None
-            
-            # Set output directory
-            if not output_dir:
-                output_dir = os.path.join(self.temp_dir, "output")
-            ensure_dir_exists(output_dir)
-            
-            base_filename = "tts_output"
-            
-            if engine == "kokoro":
-                processor = self.kokoro_processor
-                processor.set_generation_params(voice=voice, speed=speed)
-                audio_files = processor.text_to_speech(
-                    text=text,
-                    output_dir=output_dir,
-                    base_filename=base_filename,
-                    voice=voice,
-                    speed=speed
-                )
-            else:  # chatterbox
-                processor = self.chatterbox_processor
-                # For Chatterbox, audio_prompt_path is required
-                if not audio_prompt_path:
-                    return "Chatterbox requires a reference audio file. Please upload one.", None
-                
-                audio_files = processor.text_to_speech(
-                    text=text,
-                    output_dir=output_dir,
-                    base_filename=base_filename,
-                    audio_prompt_path=audio_prompt_path
-                )
-            
-            if not audio_files:
-                return "No audio files were generated.", None
-            
-            # Merge if requested
-            if merge_output and len(audio_files) > 1:
-                merged_file = os.path.join(output_dir, f"{base_filename}_merged.wav")
-                merge_audio_files(audio_files, merged_file)
-                return f"Generated {len(audio_files)} audio segments and merged into single file.", merged_file
-            
-            return f"Generated {len(audio_files)} audio segments.", audio_files[0] if len(audio_files) == 1 else None
-            
-        except Exception as e:
-            logger.error(f"Error processing text: {e}")
-            return f"Error processing text: {str(e)}", None
-    
-    def process_file_input(self,
-                          file_obj,
-                          engine: str,
-                          output_dir: str,
-                          lang: str = "a",
-                          voice: str = "af_heart",
-                          speed: float = 1.0,
-                          device: str = None,
-                          merge_output: bool = False,
-                          threads: int = 1,
-                          paragraphs_per_chunk: int = 30,
-                          audio_prompt_path: str = None) -> tuple:
-        """Process file input (PDF or text)."""
-        if file_obj is None:
-            return "Please upload a file.", None
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(process_chunk_worker, job_name) for _ in range(num_workers)]
+            for future in as_completed(futures):
+                future.result() # Wait for all workers to complete
         
-        try:
-            file_path = file_obj.name
-            file_ext = Path(file_path).suffix.lower()
-            
-            # Extract text based on file type
+        logger.info(f"All workers have finished for job '{job_name}'.")
+
+        stats = db.get_job_stats(db_conn, job_id)
+
+        if stats.get('total', 0) == stats.get('completed', 0):
+            db.update_job_status(db_conn, job_id, 'completed')
+            return True
+        else:
+            db.update_job_status(db_conn, job_id, 'failed')
+            return False
+    finally:
+        db_conn.close()
+
+def create_and_run_job(
+    file_obj, text_input, num_workers, paragraphs_per_chunk,
+    output_dir, engine, lang, voice, speed, device, merge_output,
+    cb_audio_prompt, cb_exaggeration, cb_cfg_weight
+):
+    """Handles job creation and execution triggered by the Gradio Web UI.
+
+    This generator function performs the end-to-end process of creating and
+    running a TTS job. It yields status updates to the Gradio interface at
+    various stages.
+
+    Args:
+        file_obj: The uploaded file object from Gradio (PDF or TXT).
+        text_input: Text entered directly into the textbox.
+        num_workers: Number of parallel worker processes.
+        paragraphs_per_chunk: Number of paragraphs to group into one DB chunk.
+        output_dir: Directory to save audio files.
+        engine: The selected TTS engine ('kokoro' or 'chatterbox').
+        lang: Language code (for Kokoro).
+        voice: Voice model (for Kokoro).
+        speed: Speech speed.
+        device: Compute device ('cpu', 'cuda', 'mps').
+        merge_output: Boolean, whether to merge final audio.
+        cb_audio_prompt: Reference audio file for Chatterbox.
+        cb_exaggeration: Exaggeration parameter for Chatterbox.
+        cb_cfg_weight: CFG weight for Chatterbox.
+
+    Yields:
+        A tuple of Gradio updates for the status box, audio output, and
+        button states.
+    """
+    db_conn = db.create_connection()
+    if not db_conn:
+        yield "Error: Could not connect to the database.", None, gr.update(interactive=True), gr.update(interactive=True)
+        return
+    db.create_tables(db_conn)
+
+    try:
+        # --- Determine Job Name and Extract Text ---
+        text_to_process = ""
+        input_source_name = "direct_text"
+        input_file_path = "direct_text"
+        if file_obj is not None:
+            input_file_path = file_obj.name
+            input_source_name = Path(input_file_path).stem
+            file_ext = Path(input_file_path).suffix.lower()
             if file_ext == '.pdf':
-                text = extract_text_from_pdf(file_path)
-                input_type = "PDF"
+                text_to_process = extract_text_from_pdf(input_file_path)
             elif file_ext in ['.txt', '.md']:
-                text = extract_text_from_txt(file_path)
-                input_type = "Text file"
-            else:
-                return "Unsupported file type. Please upload PDF or text files.", None
-            
-            if not text.strip():
-                return f"No text could be extracted from the {input_type.lower()}.", None
-            
-            # Split into chunks if needed
-            chunks = split_text_into_chunks(text, paragraphs_per_chunk)
-            
-            # Initialize processor
-            init_msg = self.initialize_processors(engine, device)
-            if "Error" in init_msg:
-                return init_msg, None
-            
-            # Set output directory
-            if not output_dir:
-                output_dir = os.path.join(self.temp_dir, "output")
-            ensure_dir_exists(output_dir)
-            
-            base_filename = Path(file_path).stem
-            
-            all_audio_files = []
-            
-            for i, chunk in enumerate(chunks):
-                chunk_filename = f"{base_filename}_chunk_{i}"
-                
-                if engine == "kokoro":
-                    processor = self.kokoro_processor
-                    processor.set_generation_params(voice=voice, speed=speed)
-                    audio_files = processor.text_to_speech(
-                        text=chunk,
-                        output_dir=output_dir,
-                        base_filename=chunk_filename,
-                        voice=voice,
-                        speed=speed
-                    )
-                else:  # chatterbox
-                    processor = self.chatterbox_processor
-                    # For Chatterbox, audio_prompt_path is required
-                    if not audio_prompt_path:
-                        return "Chatterbox requires a reference audio file. Please upload one.", None
-                    
-                    audio_files = processor.text_to_speech(
-                        text=chunk,
-                        output_dir=output_dir,
-                        base_filename=chunk_filename,
-                        audio_prompt_path=audio_prompt_path
-                    )
-                
-                all_audio_files.extend(audio_files)
-            
-            if not all_audio_files:
-                return "No audio files were generated.", None
-            
-            # Merge if requested
-            if merge_output and len(all_audio_files) > 1:
-                merged_file = os.path.join(output_dir, f"{base_filename}_merged.wav")
-                merge_audio_files(all_audio_files, merged_file)
-                return f"Processed {input_type} into {len(all_audio_files)} audio segments and merged.", merged_file
-            
-            return f"Processed {input_type} into {len(all_audio_files)} audio segments.", all_audio_files[0] if len(all_audio_files) == 1 else None
-            
-        except Exception as e:
-            logger.error(f"Error processing file: {e}")
-            return f"Error processing file: {str(e)}", None
-    
-    def process_conversation(self,
-                            file_obj,
-                            engine: str,
-                            output_dir: str,
-                            male_voice: str = "am_adam",
-                            female_voice: str = "af_heart",
-                            speed: float = 1.0,
-                            device: str = None,
-                            merge_output: bool = False,
-                            audio_prompt_male_path: str | None = None,
-                            audio_prompt_female_path: str | None = None) -> tuple:
-        """Process conversation input."""
-        if file_obj is None:
-            return "Please upload a conversation file.", None
+                text_to_process = extract_text_from_txt(input_file_path)
+        elif text_input:
+            text_to_process = text_input
         
-        try:
-            file_path = file_obj.name
-            text = extract_text_from_txt(file_path)
-            
-            if not text.strip():
-                return "No text could be extracted from the conversation file.", None
-            
-            # Parse conversation
-            conversation_parts = extract_conversation_from_text(text)
-            
-            if not conversation_parts:
-                return "No conversation parts found. Please ensure the file contains 'Man:' and 'Woman:' prefixes.", None
-            
-            # Initialize processor
-            init_msg = self.initialize_processors(engine, device)
-            if "Error" in init_msg:
-                return init_msg, None
-            
-            # Set output directory
-            if not output_dir:
-                output_dir = os.path.join(self.temp_dir, "output")
-            ensure_dir_exists(output_dir)
-            
-            base_filename = Path(file_path).stem
-            
-            all_audio_files = []
-            
-            for i, (speaker, line) in enumerate(conversation_parts):
-                if engine == "kokoro":
-                    voice = male_voice if speaker == "Man" else female_voice
-                    processor = self.kokoro_processor
-                    processor.set_generation_params(voice=voice, speed=speed)
-                    audio_files = processor.text_to_speech(
-                        text=line,
-                        output_dir=output_dir,
-                        base_filename=f"{base_filename}_{speaker.lower()}_{i:03d}",
-                        voice=voice,
-                        speed=speed
-                    )
-                else:  # chatterbox
-                    processor = self.chatterbox_processor
-                    # For Chatterbox conversation, both male and female prompts are required
-                    if not audio_prompt_male_path or not audio_prompt_female_path:
-                        return (
-                            "Chatterbox conversation requires two reference audio files: Male and Female.",
-                            None,
-                        )
+        if not text_to_process.strip():
+            yield "Error: No text to process.", None, gr.update(interactive=True), gr.update(interactive=True)
+            return
 
-                    chosen_prompt = (
-                        audio_prompt_male_path if speaker == "Man" else audio_prompt_female_path
-                    )
+        job_name = f"{input_source_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
 
-                    audio_files = processor.text_to_speech(
-                        text=line,
-                        output_dir=output_dir,
-                        base_filename=f"{base_filename}_{speaker.lower()}_{i:03d}",
-                        audio_prompt_path=chosen_prompt
-                    )
-                
-                all_audio_files.extend(audio_files)
-            
-            if not all_audio_files:
-                return "No audio files were generated.", None
-            
-            # Merge if requested
-            if merge_output:
-                merged_file = os.path.join(output_dir, f"{base_filename}_merged.wav")
-                merge_audio_files(all_audio_files, merged_file)
-                return f"Processed conversation into {len(all_audio_files)} audio segments and merged.", merged_file
-            
-            return f"Processed conversation into {len(all_audio_files)} audio segments.", None
-            
-        except Exception as e:
-            logger.error(f"Error processing conversation: {e}")
-            return f"Error processing conversation: {str(e)}", None
+        # --- Create Job in DB ---
+        cb_prompt_path = cb_audio_prompt.name if cb_audio_prompt else None
+        job_id = db.create_job(
+            conn=db_conn, job_name=job_name,
+            input_file=input_file_path,
+            output_dir=output_dir, engine=engine, lang=lang,
+            voice=voice, speed=speed, device=device, merge_output=merge_output,
+            cb_audio_prompt=cb_prompt_path,
+            cb_exaggeration=cb_exaggeration,
+            cb_cfg_weight=cb_cfg_weight
+        )
+        if not job_id:
+            yield f"Error: Job '{job_name}' already exists or could not be created.", None, gr.update(interactive=True), gr.update(interactive=True)
+            return
+
+        text_chunks = split_text_into_chunks(text_to_process, paragraphs_per_chunk)
+        db.create_chunks(db_conn, job_id, text_chunks)
+
+        # --- Run Processing ---
+        status_message = f"Job '{job_name}' created with {len(text_chunks)} chunks. Processing..."
+        yield status_message, None, gr.update(interactive=False), gr.update(interactive=False)
+
+        job_successful = run_job_processing(job_name, num_workers)
+
+        # --- Finalize and Return Result ---
+        if job_successful:
+            job_data = db.get_job_by_name(db_conn, job_name)
+            if job_data['merge_output']:
+                # We must regather all segment files from the filesystem, as the DB only stores one representative path per chunk
+                pattern = os.path.join(job_data['output_dir'], f"{job_name}_chunk_*_segment_*.wav")
+                audio_files = glob.glob(pattern)
+                if audio_files:
+                    sorted_files = natsort.natsorted(audio_files)
+                    merged_filename = f"{job_name}_merged.wav"
+                    merged_path = os.path.join(job_data['output_dir'], merged_filename)
+                    ensure_dir_exists(job_data['output_dir'])
+                    merge_audio_files(sorted_files, merged_path)
+                    yield f"Job '{job_name}' completed and merged successfully!", merged_path, gr.update(interactive=True), gr.update(interactive=True)
+                else:
+                    yield f"Job '{job_name}' completed, but no audio files found to merge.", None, gr.update(interactive=True), gr.update(interactive=True)
+            else:
+                yield f"Job '{job_name}' completed successfully (no merging).", None, gr.update(interactive=True), gr.update(interactive=True)
+        else:
+            yield f"Error: Job '{job_name}' failed or completed with errors.", None, gr.update(interactive=True), gr.update(interactive=True)
+
+    finally:
+        db_conn.close()
+
+def get_jobs_df():
+    """Fetches all jobs from the database and formats them for display in a DataFrame.
+
+    Returns:
+        A pandas.DataFrame containing the list of all jobs, with columns
+        renamed for presentation.
+    """
+    db_conn = db.create_connection()
+    if not db_conn:
+        return pd.DataFrame()
+    try:
+        jobs = db.get_all_jobs(db_conn)
+        if not jobs:
+            return pd.DataFrame(columns=['ID', 'Job Name', 'Status', 'Created At'])
+        df = pd.DataFrame(jobs)
+        df = df.rename(columns={'id': 'ID', 'job_name': 'Job Name', 'status': 'Status', 'created_at': 'Created At'})
+        return df
+    finally:
+        db_conn.close()
 
 def create_ui():
-    tts_ui = TTSWebUI()
-    
-    with gr.Blocks(title="TTS App Web UI", theme=gr.themes.Monochrome()) as interface:
-        gr.Markdown("# 🎵 TTS: Text/PDF/Conversation to Audio Converter")
-        gr.Markdown("Convert text, PDF files, or conversations to speech using Kokoro or Chatterbox TTS engines.")
+    """Builds and configures the entire Gradio user interface.
+
+    This function defines the layout of the web UI, including tabs for creating
+    jobs and viewing the dashboard. It also sets up all the event handlers
+    (e.g., button clicks, dropdown changes) that connect the UI components
+    to the backend logic.
+
+    Returns:
+        A Gradio Blocks interface object.
+    """
+    with gr.Blocks(title="TTS App - Advanced", theme=gr.themes.Monochrome()) as interface:
+        gr.Markdown("# 🎵 TTS: Scalable Text-to-Speech")
         
         with gr.Tabs():
-            # Text Input Tab
-            with gr.TabItem("Text Input"):
+            with gr.TabItem("Create Job"):
                 with gr.Row():
-                    with gr.Column():
-                        text_input = gr.Textbox(
-                            label="Enter Text",
-                            placeholder="Type or paste your text here...",
-                            lines=10
-                        )
-                        engine_text = gr.Radio(
-                            ["kokoro", "chatterbox"],
-                            label="TTS Engine",
-                            value="kokoro"
-                        )
-                        with gr.Row():
-                            lang_text = gr.Textbox(label="Language Code", value="a", visible=True)
-                            voice_text = gr.Textbox(label="Voice", value="af_heart")
-                            speed_text = gr.Number(label="Speed", value=1.0, minimum=0.5, maximum=2.0)
-                        audio_prompt_text = gr.File(
-                            label="Reference Audio (Required for Chatterbox)", 
-                            file_types=[".wav", ".mp3", ".flac"],
-                            visible=False
-                        )
-                        device_text = gr.Textbox(label="Device (cpu/cuda/mps)", placeholder="auto")
-                        output_dir_text = gr.Textbox(label="Output Directory", placeholder="./output_audio")
-                        merge_text = gr.Checkbox(label="Merge Output", value=False)
+                    with gr.Column(scale=2):
+                        file_input = gr.File(label="Upload File (PDF/TXT)", file_types=[".pdf", ".txt", ".md"])
+                        text_input = gr.Textbox(label="Or Enter Text", lines=5)
+                        output_dir = gr.Textbox(label="Output Directory", value="./output_audio")
                         
-                    with gr.Column():
-                        text_status = gr.Textbox(label="Status", interactive=False)
-                        text_audio = gr.Audio(label="Generated Audio", visible=False)
-                        text_btn = gr.Button("Generate Speech", variant="primary")
-            
-            # File Input Tab
-            with gr.TabItem("File Input (PDF/TXT)"):
-                with gr.Row():
-                    with gr.Column():
-                        file_input = gr.File(label="Upload File", file_types=[".pdf", ".txt", ".md"])
-                        engine_file = gr.Radio(
-                            ["kokoro", "chatterbox"],
-                            label="TTS Engine",
-                            value="kokoro"
-                        )
-                        with gr.Row():
-                            lang_file = gr.Textbox(label="Language Code", value="a", visible=True)
-                            voice_file = gr.Textbox(label="Voice", value="af_heart")
-                            speed_file = gr.Number(label="Speed", value=1.0, minimum=0.5, maximum=2.0)
-                        audio_prompt_file = gr.File(
-                            label="Reference Audio (Required for Chatterbox)", 
-                            file_types=[".wav", ".mp3", ".flac"],
-                            visible=False
-                        )
-                        device_file = gr.Textbox(label="Device (cpu/cuda/mps)", placeholder="auto")
-                        output_dir_file = gr.Textbox(label="Output Directory", placeholder="./output_audio")
-                        with gr.Row():
-                            threads_file = gr.Number(label="Threads", value=1, minimum=1, maximum=8)
-                            paragraphs_file = gr.Number(label="Paragraphs per Chunk", value=30, minimum=1)
-                        merge_file = gr.Checkbox(label="Merge Output", value=False)
-                        
-                    with gr.Column():
-                        file_status = gr.Textbox(label="Status", interactive=False)
-                        file_audio = gr.Audio(label="Generated Audio", visible=False)
-                        file_btn = gr.Button("Process File", variant="primary")
-            
-            # Conversation Tab
-            with gr.TabItem("Conversation"):
-                with gr.Row():
-                    with gr.Column():
-                        conv_input = gr.File(label="Upload Conversation File", file_types=[".txt", ".md"])
-                        engine_conv = gr.Radio(
-                            ["kokoro", "chatterbox"],
-                            label="TTS Engine",
-                            value="kokoro"
-                        )
-                        with gr.Row():
-                            male_voice_conv = gr.Textbox(label="Male Voice", value="am_adam")
-                            female_voice_conv = gr.Textbox(label="Female Voice", value="af_heart")
-                        with gr.Row():
-                            audio_prompt_male_conv = gr.File(
-                                label="Male Reference Audio (Chatterbox)", 
-                                file_types=[".wav", ".mp3", ".flac"],
-                                visible=False
-                            )
-                            audio_prompt_female_conv = gr.File(
-                                label="Female Reference Audio (Chatterbox)", 
-                                file_types=[".wav", ".mp3", ".flac"],
-                                visible=False
-                            )
-                        speed_conv = gr.Number(label="Speed", value=1.0, minimum=0.5, maximum=2.0)
-                        device_conv = gr.Textbox(label="Device (cpu/cuda/mps)", placeholder="auto")
-                        output_dir_conv = gr.Textbox(label="Output Directory", placeholder="./output_audio")
-                        merge_conv = gr.Checkbox(label="Merge Output", value=True)
-                        
-                    with gr.Column():
-                        conv_status = gr.Textbox(label="Status", interactive=False)
-                        conv_audio = gr.Audio(label="Generated Audio", visible=False)
-                        conv_btn = gr.Button("Process Conversation", variant="primary")
-        
-        # Event handlers
-        def update_engine_visibility(engine):
-            if engine == "kokoro":
-                # Show text/voice fields, hide audio prompts
-                return (
-                    gr.update(visible=True),
-                    gr.update(visible=True),
-                    gr.update(visible=False),
-                )
-            else:
-                # Hide text/voice fields, show audio prompts
-                return (
-                    gr.update(visible=False),
-                    gr.update(visible=False),
-                    gr.update(visible=True),
-                )
-        
-        # Update visibility based on engine selection
-        engine_text.change(update_engine_visibility, inputs=engine_text, outputs=[lang_text, voice_text, audio_prompt_text])
-        engine_file.change(update_engine_visibility, inputs=engine_file, outputs=[lang_file, voice_file, audio_prompt_file])
-        # For conversation, we need to toggle two prompt fields at once; return value goes to the first, we mirror for second
-        def update_conv_visibility(engine):
-            show_voices, show_voices2, show_prompts = update_engine_visibility(engine)
-            return show_voices, show_voices2, show_prompts, show_prompts
+                        with gr.Accordion("Advanced Settings", open=False):
+                            engine = gr.Radio(["kokoro", "chatterbox"], label="TTS Engine", value="kokoro")
 
-        engine_conv.change(
-            update_conv_visibility,
-            inputs=engine_conv,
-            outputs=[male_voice_conv, female_voice_conv, audio_prompt_male_conv, audio_prompt_female_conv],
-        )
-        
-        # Text processing
-        def process_text(text, engine, lang, voice, speed, audio_prompt, device, output_dir, merge):
-            audio_prompt_path = audio_prompt.name if audio_prompt else None
-            status, audio_file = tts_ui.process_text_input(
-                text, engine, output_dir, lang, voice, speed, device, merge, audio_prompt_path
-            )
-            if audio_file and os.path.exists(audio_file):
-                return status, gr.update(value=audio_file, visible=True)
+                            with gr.Group(visible=True) as kokoro_settings:
+                                lang = gr.Textbox(label="Language Code (Kokoro)", value="a")
+                                voice = gr.Textbox(label="Voice (Kokoro)", value="af_heart")
+                                speed = gr.Slider(label="Speed", minimum=0.5, maximum=2.0, value=1.0)
+
+                            with gr.Group(visible=False) as chatterbox_settings:
+                                cb_audio_prompt = gr.File(label="Reference Audio (Chatterbox)", file_types=[".wav", ".mp3", ".flac"])
+                                cb_exaggeration = gr.Slider(label="Exaggeration", minimum=0, maximum=2, value=0.5)
+                                cb_cfg_weight = gr.Slider(label="CFG Weight", minimum=0, maximum=2, value=0.5)
+
+                            device = gr.Radio(["cpu", "cuda", "mps"], label="Device", value="cpu")
+                            num_workers = gr.Slider(label="Number of Workers", minimum=1, maximum=os.cpu_count(), step=1, value=2)
+                            paragraphs_per_chunk = gr.Slider(label="Paragraphs per Chunk", minimum=1, maximum=50, step=1, value=10)
+                            merge_output = gr.Checkbox(label="Merge Output Audio", value=True)
+
+                    with gr.Column(scale=1):
+                        status_box = gr.Textbox(label="Status", interactive=False)
+                        audio_output = gr.Audio(label="Generated Audio")
+                        submit_btn = gr.Button("Start Job", variant="primary")
+
+            with gr.TabItem("Job Dashboard"):
+                jobs_df = gr.DataFrame(label="All Jobs", interactive=False)
+                refresh_btn = gr.Button("Refresh Jobs List")
+
+        # --- Event Handlers ---
+        def toggle_engine_settings(engine_choice):
+            """Callback to show/hide engine-specific settings."""
+            if engine_choice == "kokoro":
+                return gr.update(visible=True), gr.update(visible=False)
             else:
-                return status, gr.update(visible=False)
-        
-        text_btn.click(
-            process_text,
-            inputs=[text_input, engine_text, lang_text, voice_text, speed_text, audio_prompt_text, device_text, output_dir_text, merge_text],
-            outputs=[text_status, text_audio]
+                return gr.update(visible=False), gr.update(visible=True)
+
+        engine.change(
+            toggle_engine_settings,
+            inputs=engine,
+            outputs=[kokoro_settings, chatterbox_settings]
         )
-        
-        # File processing
-        def process_file(file, engine, lang, voice, speed, audio_prompt, device, output_dir, threads, paragraphs, merge):
-            audio_prompt_path = audio_prompt.name if audio_prompt else None
-            status, audio_file = tts_ui.process_file_input(
-                file, engine, output_dir, lang, voice, speed, device, merge, threads, paragraphs, audio_prompt_path
-            )
-            if audio_file and os.path.exists(audio_file):
-                return status, gr.update(value=audio_file, visible=True)
-            else:
-                return status, gr.update(visible=False)
-        
-        file_btn.click(
-            process_file,
-            inputs=[file_input, engine_file, lang_file, voice_file, speed_file, audio_prompt_file, device_file, output_dir_file, threads_file, paragraphs_file, merge_file],
-            outputs=[file_status, file_audio]
-        )
-        
-        # Conversation processing
-        def process_conv(file, engine, male_voice, female_voice, audio_prompt_male, audio_prompt_female, speed, device, output_dir, merge):
-            audio_prompt_male_path = audio_prompt_male.name if audio_prompt_male else None
-            audio_prompt_female_path = audio_prompt_female.name if audio_prompt_female else None
-            status, audio_file = tts_ui.process_conversation(
-                file,
-                engine,
-                output_dir,
-                male_voice,
-                female_voice,
-                speed,
-                device,
-                merge,
-                audio_prompt_male_path,
-                audio_prompt_female_path,
-            )
-            if audio_file and os.path.exists(audio_file):
-                return status, gr.update(value=audio_file, visible=True)
-            else:
-                return status, gr.update(visible=False)
-        
-        conv_btn.click(
-            process_conv,
+
+        submit_btn.click(
+            create_and_run_job,
             inputs=[
-                conv_input,
-                engine_conv,
-                male_voice_conv,
-                female_voice_conv,
-                audio_prompt_male_conv,
-                audio_prompt_female_conv,
-                speed_conv,
-                device_conv,
-                output_dir_conv,
-                merge_conv,
+                file_input, text_input, num_workers, paragraphs_per_chunk,
+                output_dir, engine, lang, voice, speed, device, merge_output,
+                cb_audio_prompt, cb_exaggeration, cb_cfg_weight
             ],
-            outputs=[conv_status, conv_audio],
+            outputs=[status_box, audio_output, submit_btn, refresh_btn]
         )
-    
+        
+        refresh_btn.click(
+            get_jobs_df,
+            inputs=[],
+            outputs=[jobs_df]
+        )
+        
+        interface.load(get_jobs_df, outputs=jobs_df) # Load jobs on startup
+
     return interface
 
 if __name__ == "__main__":
+    # Initialize the database and tables on startup
+    init_db_conn = db.create_connection()
+    if init_db_conn:
+        db.create_tables(init_db_conn)
+        init_db_conn.close()
+
     ui = create_ui()
     ui.launch(server_name="0.0.0.0", server_port=7860, share=False)

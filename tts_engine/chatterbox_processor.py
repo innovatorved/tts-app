@@ -1,9 +1,7 @@
 import logging
 import os
-import re
 import threading
 from typing import List, Optional
-from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import soundfile as sf
 
@@ -16,22 +14,45 @@ except Exception as _e:  # noqa: N816
     torch = None
 
 from utils.file_handler import ensure_dir_exists, get_safe_filename
-from utils.split_text import smart_split_text
 
 logger = logging.getLogger(__name__)
 
 
 class ChatterboxTTSProcessor:
-    """
-    Processor that wraps ResembleAI Chatterbox TTS.
+    """A thread-safe wrapper for the Chatterbox Text-to-Speech (TTS) engine.
 
-    Notes:
-    - Chatterbox supports English currently.
-    - Voices are controlled via an optional audio_prompt_path and parameters like exaggeration/cfg_weight.
-    - We segment input text ourselves using a regex pattern before calling model.generate per segment.
+    This class manages the Chatterbox TTS model, providing an interface for
+    generating high-quality, expressive speech. It handles model initialization,
+    device auto-detection, and thread-safe audio generation. Voice cloning is
+    controlled via a reference audio prompt.
+
+    Attributes:
+        device (str): The compute device ('cuda', 'mps', or 'cpu').
+        model (_ChatterboxTTS | None): The loaded Chatterbox model instance.
+        tts_lock (threading.Lock): A lock for thread-safe TTS operations.
+        default_audio_prompt_path (str | None): Default path to the reference
+            audio file for voice cloning.
+        default_exaggeration (float): Default emotional intensity control.
+        default_cfg_weight (float): Default guidance weight.
+        default_temperature (float): Default sampling temperature.
+        default_top_p (float): Default nucleus sampling probability.
+        default_min_p (float): Default minimum nucleus sampling probability.
+        default_repetition_penalty (float): Default repetition penalty.
     """
 
     def __init__(self, device: Optional[str] = None):
+        """Initializes the ChatterboxTTSProcessor.
+
+        Checks for Chatterbox installation, auto-detects the best available
+        compute device, and loads the TTS model.
+
+        Args:
+            device: The compute device to use ('cuda', 'mps', or 'cpu'). If
+                None, it will be auto-detected.
+
+        Raises:
+            ImportError: If the 'chatterbox-tts' library is not installed.
+        """
         if _ChatterboxTTS is None:
             raise ImportError(
                 "chatterbox-tts is not installed. Please `pip install chatterbox-tts` to use this engine."
@@ -41,8 +62,7 @@ class ChatterboxTTSProcessor:
         self.model = None
         self.tts_lock = threading.Lock()
 
-        # Defaults; can be overridden by set_generation_params or per-call
-        self.default_split_pattern = r"\n\n+|\r\n\r\n+|\n\s*\n+|[.!?]\s"
+    # Defaults; can be overridden by set_generation_params or per-call
         self.default_audio_prompt_path: Optional[str] = None
         self.default_exaggeration: float = 0.5
         self.default_cfg_weight: float = 0.5
@@ -54,6 +74,12 @@ class ChatterboxTTSProcessor:
         self._initialize_model()
 
     def _autodetect_device(self) -> str:
+        """Auto-detects the best available torch device.
+
+        Returns:
+            A string ('cuda', 'mps', or 'cpu') representing the best
+            available device.
+        """
         try:
             if torch and torch.cuda.is_available():
                 return "cuda"
@@ -64,6 +90,11 @@ class ChatterboxTTSProcessor:
         return "cpu"
 
     def _initialize_model(self):
+        """Loads the Chatterbox TTS model from pretrained weights.
+
+        Raises:
+            Exception: If the model fails to load.
+        """
         logger.info(f"Initializing Chatterbox TTS on device='{self.device}'.")
         try:
             self.model = _ChatterboxTTS.from_pretrained(device=self.device)
@@ -82,8 +113,19 @@ class ChatterboxTTSProcessor:
         top_p: Optional[float] = None,
         min_p: Optional[float] = None,
         repetition_penalty: Optional[float] = None,
-        split_pattern: Optional[str] = None,
     ) -> None:
+        """Sets the default parameters for audio generation.
+
+        Args:
+            audio_prompt_path: Path to a reference audio file (WAV/MP3/FLAC)
+                to guide the voice.
+            exaggeration: Emotion/intensity control (e.g., 0.5).
+            cfg_weight: Guidance weight (e.g., 0.5).
+            temperature: Sampling temperature for generation.
+            top_p: Nucleus sampling `p` value.
+            min_p: Minimum nucleus sampling `p` value.
+            repetition_penalty: Penalty for repeating tokens.
+        """
         if audio_prompt_path is not None:
             self.default_audio_prompt_path = audio_prompt_path
         if exaggeration is not None:
@@ -98,26 +140,47 @@ class ChatterboxTTSProcessor:
             self.default_min_p = float(min_p)
         if repetition_penalty is not None:
             self.default_repetition_penalty = float(repetition_penalty)
-        if split_pattern is not None:
-            self.default_split_pattern = split_pattern
 
-    def _split_text(self, text: str, split_pattern: str) -> List[str]:
-        # Use smart splitting instead of regex splitting
-        return smart_split_text(text, split_pattern)
-
-    def _generate_segment(
+    def _generate_single(
         self,
-        segment_data: tuple,
+        *,
+        text: str,
+        output_dir: str,
+        base_filename: str,
+        audio_prompt_path: str,
+        exaggeration: float,
+        cfg_weight: float,
+        temperature: float,
+        top_p: float,
+        min_p: float,
+        repetition_penalty: float,
     ) -> Optional[str]:
+        """Generates audio for a single text segment and returns the file path.
+
+        This internal method performs the core TTS generation, saving the
+        resulting audio to a WAV file.
+
+        Args:
+            text: The text segment to convert to speech.
+            output_dir: The directory to save the audio file.
+            base_filename: The base name for the output file.
+            audio_prompt_path: Path to the reference audio for voice cloning.
+            exaggeration: Emotion/intensity control.
+            cfg_weight: Guidance weight.
+            temperature: Sampling temperature.
+            top_p: Nucleus sampling `p` value.
+            min_p: Minimum nucleus sampling `p` value.
+            repetition_penalty: Repetition penalty.
+
+        Returns:
+            The full path to the generated WAV file, or None if generation fails.
         """
-        Generate audio for a single segment. Designed for parallel execution.
-        segment_data: (text, output_dir, base_filename, segment_idx, audio_prompt_path, exaggeration, cfg_weight, temperature, top_p, min_p, repetition_penalty)
-        """
-        text, output_dir, base_filename, segment_idx, audio_prompt_path, exaggeration, cfg_weight, temperature, top_p, min_p, repetition_penalty = segment_data
-        
+        if not text or not text.strip():
+            logger.warning(f"Empty text for base '{base_filename}'. Skipping.")
+            return None
         try:
             wav = self.model.generate(
-                text,
+                text.strip(),
                 audio_prompt_path=audio_prompt_path,
                 exaggeration=exaggeration,
                 cfg_weight=cfg_weight,
@@ -126,16 +189,15 @@ class ChatterboxTTSProcessor:
                 min_p=min_p,
                 repetition_penalty=repetition_penalty,
             )
-            # Convert torch tensor to numpy for soundfile
             wav_np = wav.squeeze(0).detach().cpu().numpy()
             ensure_dir_exists(output_dir)
             safe_base = get_safe_filename(base_filename)
-            fpath = os.path.join(output_dir, f"{safe_base}_segment_{segment_idx:03d}.wav")
+            fpath = os.path.join(output_dir, f"{safe_base}.wav")
             sf.write(fpath, wav_np, self.model.sr)
-            logger.info(f"Saved audio segment: {fpath}")
+            logger.info(f"Saved audio file: {fpath}")
             return fpath
         except Exception as e:
-            logger.error(f"Error generating/saving segment {segment_idx} for '{base_filename}': {e}")
+            logger.error(f"Error generating audio for '{base_filename}': {e}")
             return None
 
     def text_to_speech(
@@ -151,9 +213,35 @@ class ChatterboxTTSProcessor:
         top_p: Optional[float] = None,
         min_p: Optional[float] = None,
         repetition_penalty: Optional[float] = None,
-        split_pattern: Optional[str] = None,
         use_lock: bool = True,
+        pre_split: bool = True,  # ignored; always single segment now
     ) -> List[str]:
+        """Converts a text segment to speech using the Chatterbox engine.
+
+        This is the main public method for audio generation. It resolves all
+        generation parameters (using defaults if not provided), ensures a
+        reference audio prompt is available, and performs the generation in a
+        thread-safe manner.
+
+        Args:
+            text: The pre-split text segment to convert.
+            output_dir: The directory to save the output audio file.
+            base_filename: The base name for the output file.
+            audio_prompt_path: Specific audio prompt to use for this call.
+            exaggeration: Specific exaggeration value for this call.
+            cfg_weight: Specific CFG weight for this call.
+            temperature: Specific temperature for this call.
+            top_p: Specific top_p for this call.
+            min_p: Specific min_p for this call.
+            repetition_penalty: Specific repetition penalty for this call.
+            use_lock: If True, uses a lock to ensure thread-safety.
+            pre_split: Ignored; retained for compatibility. Assumes text is
+                a single segment.
+
+        Returns:
+            A list containing the path to the generated audio file, or an
+            empty list on failure (e.g., model not initialized, no audio prompt).
+        """
         if not self.model:
             logger.error("Chatterbox model not initialized.")
             return []
@@ -166,55 +254,29 @@ class ChatterboxTTSProcessor:
         curr_top_p = self.default_top_p if top_p is None else float(top_p)
         curr_min_p = self.default_min_p if min_p is None else float(min_p)
         curr_rep = self.default_repetition_penalty if repetition_penalty is None else float(repetition_penalty)
-        curr_split_pattern = self.default_split_pattern if split_pattern is None else split_pattern
-
         # Enforce audio prompt requirement for Chatterbox
         if curr_prompt is None:
             logger.error(
                 "Chatterbox requires a reference audio_prompt_path (WAV/MP3/FLAC). Provide one to proceed."
             )
             return []
-
-        segments = self._split_text(text, curr_split_pattern)
-        if not segments:
-            logger.warning(f"No text to synthesize for '{base_filename}'.")
-            return []
-
-        out_files: List[str] = []
-
-        def _run() -> List[str]:
-            local_out: List[str] = []
-            
-            # For parallel processing, we'll use ThreadPoolExecutor instead of ProcessPoolExecutor
-            # since the model object can't be pickled for process-based parallelism
-            from concurrent.futures import ThreadPoolExecutor
-            
-            # Prepare segment data for parallel processing
-            segment_data_list = []
-            for i, seg in enumerate(segments):
-                segment_data = (
-                    seg, output_dir, base_filename, i,
-                    curr_prompt, curr_exaggeration, curr_cfg_weight,
-                    curr_temperature, curr_top_p, curr_min_p, curr_rep
-                )
-                segment_data_list.append(segment_data)
-            
-            # Use ThreadPoolExecutor for parallel processing
-            with ThreadPoolExecutor(max_workers=min(len(segment_data_list), 4)) as executor:
-                futures = [executor.submit(self._generate_segment, data) for data in segment_data_list]
-                for future in as_completed(futures):
-                    result = future.result()
-                    if result:
-                        local_out.append(result)
-            
-            # Sort by segment index to maintain order
-            local_out.sort(key=lambda x: int(re.search(r'_segment_(\d+)\.wav', x).group(1)))
-            return local_out
+        def _run_single() -> List[str]:
+            result = self._generate_single(
+                text=text,
+                output_dir=output_dir,
+                base_filename=base_filename,
+                audio_prompt_path=curr_prompt,
+                exaggeration=curr_exaggeration,
+                cfg_weight=curr_cfg_weight,
+                temperature=curr_temperature,
+                top_p=curr_top_p,
+                min_p=curr_min_p,
+                repetition_penalty=curr_rep,
+            )
+            return [result] if result else []
 
         if use_lock:
             with self.tts_lock:
-                out_files = _run()
+                return _run_single()
         else:
-            out_files = _run()
-
-        return out_files
+            return _run_single()
