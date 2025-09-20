@@ -2,6 +2,7 @@ import logging
 import os
 import database as db
 from utils.file_handler import ensure_dir_exists
+from utils.logger import setup_logging
 
 def process_chunk_worker(job_name: str) -> int:
     """
@@ -9,7 +10,7 @@ def process_chunk_worker(job_name: str) -> int:
     It continuously fetches and processes chunks for a given job.
     """
     # Re-initialize logging for the worker process
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(processName)s - %(levelname)s - %(message)s")
+    setup_logging(main_process=False)
     worker_logger = logging.getLogger(__name__)
 
     db_conn = db.create_connection()

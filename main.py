@@ -10,6 +10,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 import natsort
 
 import database as db
+from utils.logger import setup_logging
 from utils.pdf_parser import extract_text_from_pdf
 from utils.file_handler import ensure_dir_exists
 from utils.text_file_parser import extract_text_from_txt
@@ -25,8 +26,7 @@ if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
 # --- Logging Setup ---
-log_format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-logging.basicConfig(level=logging.INFO, format=log_format)
+setup_logging(main_process=True)
 logger = logging.getLogger(__name__)
 # ---
 
@@ -72,7 +72,7 @@ def main():
     args = parser.parse_args()
 
     if args.verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+        setup_logging(level=logging.DEBUG, main_process=True)
         logger.info("Verbose logging enabled.")
 
     db_conn = db.create_connection()
