@@ -184,31 +184,18 @@ class ChatterboxTTSProcessor:
 
         def _run() -> List[str]:
             local_out: List[str] = []
-            
-            # For parallel processing, we'll use ThreadPoolExecutor instead of ProcessPoolExecutor
-            # since the model object can't be pickled for process-based parallelism
-            from concurrent.futures import ThreadPoolExecutor
-            
-            # Prepare segment data for parallel processing
-            segment_data_list = []
+
+            # Process segments sequentially
             for i, seg in enumerate(segments):
                 segment_data = (
                     seg, output_dir, base_filename, i,
                     curr_prompt, curr_exaggeration, curr_cfg_weight,
                     curr_temperature, curr_top_p, curr_min_p, curr_rep
                 )
-                segment_data_list.append(segment_data)
-            
-            # Use ThreadPoolExecutor for parallel processing
-            with ThreadPoolExecutor(max_workers=min(len(segment_data_list), 4)) as executor:
-                futures = [executor.submit(self._generate_segment, data) for data in segment_data_list]
-                for future in as_completed(futures):
-                    result = future.result()
-                    if result:
-                        local_out.append(result)
-            
-            # Sort by segment index to maintain order
-            local_out.sort(key=lambda x: int(re.search(r'_segment_(\d+)\.wav', x).group(1)))
+                result = self._generate_segment(segment_data)
+                if result:
+                    local_out.append(result)
+
             return local_out
 
         if use_lock:
