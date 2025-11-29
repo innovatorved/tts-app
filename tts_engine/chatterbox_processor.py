@@ -1,6 +1,8 @@
 import logging
 import os
 import threading
+import tempfile
+import shutil
 from typing import List, Optional
 
 import soundfile as sf
@@ -8,10 +10,12 @@ import soundfile as sf
 # Import lazily so the project can still run in Kokoro mode without chatterbox installed
 try:
     import torch
+    import torchaudio
     from chatterbox.tts import ChatterboxTTS as _ChatterboxTTS
 except Exception as _e:  # noqa: N816
     _ChatterboxTTS = None
     torch = None
+    torchaudio = None
 
 from utils.file_handler import ensure_dir_exists, get_safe_filename
 
@@ -71,7 +75,58 @@ class ChatterboxTTSProcessor:
         self.default_min_p: float = 0.05
         self.default_repetition_penalty: float = 1.2
 
+        self.default_repetition_penalty: float = 1.2
+
         self._initialize_model()
+
+    def _prepare_audio_prompt(self, audio_path: str) -> str:
+        """Pre-processes the audio prompt to ensure optimal format and sample rate.
+
+        Args:
+            audio_path: Path to the input audio file.
+
+        Returns:
+            Path to the optimized temporary audio file.
+        """
+        if not os.path.exists(audio_path):
+            logger.warning(f"Audio prompt not found: {audio_path}")
+            return audio_path
+
+        try:
+            # Load audio
+            waveform, sample_rate = torchaudio.load(audio_path)
+            
+            # Check duration
+            duration = waveform.shape[1] / sample_rate
+            if duration < 3.0:
+                logger.warning(f"Audio prompt '{audio_path}' is too short ({duration:.2f}s). Recommended: 7-20s.")
+            elif duration > 20.0:
+                logger.warning(f"Audio prompt '{audio_path}' is longer than recommended ({duration:.2f}s).")
+
+            # Target sample rate (default to 24000 if model sr not available, though it should be)
+            target_sr = getattr(self.model, 'sr', 24000)
+
+            if sample_rate != target_sr:
+                logger.info(f"Resampling audio prompt from {sample_rate}Hz to {target_sr}Hz.")
+                resampler = torchaudio.transforms.Resample(orig_freq=sample_rate, new_freq=target_sr)
+                waveform = resampler(waveform)
+
+            # Mix to mono if stereo
+            if waveform.shape[0] > 1:
+                waveform = torch.mean(waveform, dim=0, keepdim=True)
+
+            # Save to temp file
+            temp_file = tempfile.NamedTemporaryFile(suffix=".wav", delete=False)
+            temp_path = temp_file.name
+            temp_file.close()
+            
+            torchaudio.save(temp_path, waveform, target_sr)
+            logger.info(f"Optimized audio prompt saved to: {temp_path}")
+            return temp_path
+
+        except Exception as e:
+            logger.error(f"Failed to optimize audio prompt '{audio_path}': {e}")
+            return audio_path
 
     def _autodetect_device(self) -> str:
         """Auto-detects the best available torch device.
@@ -127,7 +182,7 @@ class ChatterboxTTSProcessor:
             repetition_penalty: Penalty for repeating tokens.
         """
         if audio_prompt_path is not None:
-            self.default_audio_prompt_path = audio_prompt_path
+            self.default_audio_prompt_path = self._prepare_audio_prompt(audio_prompt_path)
         if exaggeration is not None:
             self.default_exaggeration = float(exaggeration)
         if cfg_weight is not None:
@@ -247,7 +302,9 @@ class ChatterboxTTSProcessor:
             return []
 
         # Resolve current params
-        curr_prompt = audio_prompt_path if audio_prompt_path is not None else self.default_audio_prompt_path
+        # If a specific prompt is provided for this call, optimize it on the fly (or use as is if optimization fails)
+        # Note: Ideally, one should use set_generation_params for persistent prompts to avoid re-optimizing every call.
+        curr_prompt = self._prepare_audio_prompt(audio_prompt_path) if audio_prompt_path is not None else self.default_audio_prompt_path
         curr_exaggeration = self.default_exaggeration if exaggeration is None else float(exaggeration)
         curr_cfg_weight = self.default_cfg_weight if cfg_weight is None else float(cfg_weight)
         curr_temperature = self.default_temperature if temperature is None else float(temperature)
