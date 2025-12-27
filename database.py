@@ -47,6 +47,7 @@ def create_tables(conn):
                 device TEXT,
                 merge_output BOOLEAN,
                 cb_audio_prompt TEXT,
+                cb_voice_cloning BOOLEAN DEFAULT 0,
                 cb_exaggeration REAL,
                 cb_cfg_weight REAL,
                 cb_temperature REAL,
@@ -76,7 +77,7 @@ def create_tables(conn):
         logger.error(f"Error creating tables: {e}")
 
 def create_job(conn, job_name, input_file, output_dir, engine, lang, voice, speed, device, merge_output,
-               cb_audio_prompt=None, cb_exaggeration=None, cb_cfg_weight=None, cb_temperature=None,
+               cb_audio_prompt=None, cb_voice_cloning=False, cb_exaggeration=None, cb_cfg_weight=None, cb_temperature=None,
                cb_top_p=None, cb_min_p=None, cb_repetition_penalty=None):
     """Creates a new job record in the 'jobs' table.
 
@@ -94,7 +95,8 @@ def create_job(conn, job_name, input_file, output_dir, engine, lang, voice, spee
         speed: Speech speed multiplier.
         device: The compute device to use.
         merge_output: Boolean flag to merge audio chunks.
-        cb_audio_prompt: Path to reference audio for Chatterbox.
+        cb_audio_prompt: Path to reference audio for Chatterbox voice cloning.
+        cb_voice_cloning: Boolean flag to enable voice cloning mode.
         cb_exaggeration: Exaggeration parameter for Chatterbox.
         cb_cfg_weight: CFG weight for Chatterbox.
         cb_temperature: Temperature for Chatterbox.
@@ -106,12 +108,12 @@ def create_job(conn, job_name, input_file, output_dir, engine, lang, voice, spee
         The integer ID of the newly created or existing job, or None on error.
     """
     sql = ''' INSERT INTO jobs(job_name, input_file, output_dir, engine, lang, voice, speed, device, merge_output,
-                               cb_audio_prompt, cb_exaggeration, cb_cfg_weight, cb_temperature,
+                               cb_audio_prompt, cb_voice_cloning, cb_exaggeration, cb_cfg_weight, cb_temperature,
                                cb_top_p, cb_min_p, cb_repetition_penalty)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) '''
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) '''
     try:
         params = (job_name, input_file, output_dir, engine, lang, voice, speed, device, merge_output,
-                  cb_audio_prompt, cb_exaggeration, cb_cfg_weight, cb_temperature,
+                  cb_audio_prompt, cb_voice_cloning, cb_exaggeration, cb_cfg_weight, cb_temperature,
                   cb_top_p, cb_min_p, cb_repetition_penalty)
         cursor = conn.cursor()
         cursor.execute(sql, params)

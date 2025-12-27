@@ -156,7 +156,8 @@ python main.py --resume --job-name "my-book-job" --num-workers 4
 - `--speed <float>`: Speech speed multiplier (e.g., 1.0 is normal).
 
 ### Chatterbox Engine Options
-- `--cb_audio_prompt <path.wav>`: Path to a reference audio file to guide the voice.
+- `--cb_voice_cloning`: Enable voice cloning mode. When enabled, requires `--cb_audio_prompt`. When disabled (default), Chatterbox generates speech with its default voice.
+- `--cb_audio_prompt <path.wav>`: Path to a reference audio file for voice cloning (requires `--cb_voice_cloning`).
 - `--cb_exaggeration <float>`: Emotion/intensity control (default: 0.5).
 - `--cb_cfg_weight <float>`: Guidance weight (default: 0.5).
 - `--cb_temperature <float>`: Sampling temperature (default: 0.8).

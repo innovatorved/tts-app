@@ -80,7 +80,8 @@ def main():
 
     # --- Chatterbox-specific arguments ---
     cb_group = parser.add_argument_group("Chatterbox Options")
-    cb_group.add_argument("--cb_audio_prompt", type=str, help="Path to reference audio for Chatterbox.")
+    cb_group.add_argument("--cb_voice_cloning", action="store_true", help="Enable voice cloning mode for Chatterbox. Requires --cb_audio_prompt.")
+    cb_group.add_argument("--cb_audio_prompt", type=str, help="Path to reference audio for Chatterbox voice cloning.")
     cb_group.add_argument("--cb_exaggeration", type=float, default=0.5, help="Chatterbox emotion exaggeration.")
     cb_group.add_argument("--cb_cfg_weight", type=float, default=0.5, help="Chatterbox CFG weight.")
     cb_group.add_argument("--cb_temperature", type=float, default=0.8, help="Chatterbox temperature.")
@@ -157,6 +158,7 @@ def main():
             voice=args.voice, speed=args.speed, device=args.device,
             merge_output=args.merge_output,
             cb_audio_prompt=args.cb_audio_prompt,
+            cb_voice_cloning=args.cb_voice_cloning,
             cb_exaggeration=args.cb_exaggeration,
             cb_cfg_weight=args.cb_cfg_weight,
             cb_temperature=args.cb_temperature,

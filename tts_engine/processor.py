@@ -1,3 +1,9 @@
+import warnings
+
+# Suppress torch deprecation warnings
+warnings.filterwarnings("ignore", message=".*weight_norm.*")
+warnings.filterwarnings("ignore", message=".*dropout option adds dropout.*")
+
 import torch
 import soundfile as sf
 from kokoro import KPipeline
@@ -84,7 +90,7 @@ class KokoroTTSProcessor:
                         f"Device '{self.device}' requested. Model will run on CPU if not available/supported or auto-detected."
                     )
 
-            self.pipeline = KPipeline(lang_code=self.lang_code)
+            self.pipeline = KPipeline(lang_code=self.lang_code, repo_id='hexgrad/Kokoro-82M')
             logger.info("Kokoro TTS pipeline initialized successfully.")
         except Exception as e:
             logger.error(f"Failed to initialize Kokoro TTS pipeline: {e}")

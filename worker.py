@@ -52,7 +52,10 @@ def process_chunk_worker(job_name: str) -> int:
             tts_processor = KokoroTTSProcessor(lang_code=job_data['lang'], device=job_data['device'])
             tts_processor.set_generation_params(voice=job_data['voice'], speed=job_data['speed'])
         elif job_data['engine'] == 'chatterbox':
-            tts_processor = ChatterboxTTSProcessor(device=job_data['device'])
+            tts_processor = ChatterboxTTSProcessor(
+                device=job_data['device'],
+                enable_voice_cloning=job_data.get('cb_voice_cloning', False)
+            )
             tts_processor.set_generation_params(
                 audio_prompt_path=job_data['cb_audio_prompt'],
                 exaggeration=job_data['cb_exaggeration'],

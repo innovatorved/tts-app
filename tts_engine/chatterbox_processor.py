@@ -11,9 +11,9 @@ import soundfile as sf
 try:
     import torch
     import torchaudio
-    from chatterbox.tts import ChatterboxTTS as _ChatterboxTTS
+    from chatterbox.tts_turbo import ChatterboxTurboTTS as _ChatterboxTurboTTS
 except Exception as _e:  # noqa: N816
-    _ChatterboxTTS = None
+    _ChatterboxTurboTTS = None
     torch = None
     torchaudio = None
 
@@ -23,19 +23,20 @@ logger = logging.getLogger(__name__)
 
 
 class ChatterboxTTSProcessor:
-    """A thread-safe wrapper for the Chatterbox Text-to-Speech (TTS) engine.
+    """A thread-safe wrapper for the Chatterbox Turbo Text-to-Speech (TTS) engine.
 
-    This class manages the Chatterbox TTS model, providing an interface for
+    This class manages the Chatterbox Turbo TTS model, providing an interface for
     generating high-quality, expressive speech. It handles model initialization,
     device auto-detection, and thread-safe audio generation. Voice cloning is
-    controlled via a reference audio prompt.
+    optional and controlled via the `enable_voice_cloning` flag.
 
     Attributes:
         device (str): The compute device ('cuda', 'mps', or 'cpu').
-        model (_ChatterboxTTS | None): The loaded Chatterbox model instance.
+        model (_ChatterboxTurboTTS | None): The loaded Chatterbox Turbo model instance.
         tts_lock (threading.Lock): A lock for thread-safe TTS operations.
+        enable_voice_cloning (bool): If True, uses reference audio for voice cloning.
         default_audio_prompt_path (str | None): Default path to the reference
-            audio file for voice cloning.
+            audio file for voice cloning (required when voice cloning is enabled).
         default_exaggeration (float): Default emotional intensity control.
         default_cfg_weight (float): Default guidance weight.
         default_temperature (float): Default sampling temperature.
@@ -44,7 +45,7 @@ class ChatterboxTTSProcessor:
         default_repetition_penalty (float): Default repetition penalty.
     """
 
-    def __init__(self, device: Optional[str] = None):
+    def __init__(self, device: Optional[str] = None, enable_voice_cloning: bool = False):
         """Initializes the ChatterboxTTSProcessor.
 
         Checks for Chatterbox installation, auto-detects the best available
@@ -53,11 +54,14 @@ class ChatterboxTTSProcessor:
         Args:
             device: The compute device to use ('cuda', 'mps', or 'cpu'). If
                 None, it will be auto-detected.
+            enable_voice_cloning: If True, voice cloning mode is enabled and
+                a reference audio_prompt_path is required for generation.
+                If False (default), the model generates speech without cloning.
 
         Raises:
             ImportError: If the 'chatterbox-tts' library is not installed.
         """
-        if _ChatterboxTTS is None:
+        if _ChatterboxTurboTTS is None:
             raise ImportError(
                 "chatterbox-tts is not installed. Please `pip install chatterbox-tts` to use this engine."
             )
@@ -65,6 +69,7 @@ class ChatterboxTTSProcessor:
         self.device = device or self._autodetect_device()
         self.model = None
         self.tts_lock = threading.Lock()
+        self.enable_voice_cloning = enable_voice_cloning
 
     # Defaults; can be overridden by set_generation_params or per-call
         self.default_audio_prompt_path: Optional[str] = None
@@ -150,12 +155,12 @@ class ChatterboxTTSProcessor:
         Raises:
             Exception: If the model fails to load.
         """
-        logger.info(f"Initializing Chatterbox TTS on device='{self.device}'.")
+        logger.info(f"Initializing Chatterbox Turbo TTS on device='{self.device}'.")
         try:
-            self.model = _ChatterboxTTS.from_pretrained(device=self.device)
-            logger.info("Chatterbox TTS model initialized successfully.")
+            self.model = _ChatterboxTurboTTS.from_pretrained(device=self.device)
+            logger.info("Chatterbox Turbo TTS model initialized successfully.")
         except Exception as e:
-            logger.error(f"Failed to load Chatterbox model: {e}")
+            logger.error(f"Failed to load Chatterbox Turbo model: {e}")
             raise
 
     def set_generation_params(
@@ -202,7 +207,7 @@ class ChatterboxTTSProcessor:
         text: str,
         output_dir: str,
         base_filename: str,
-        audio_prompt_path: str,
+        audio_prompt_path: Optional[str],
         exaggeration: float,
         cfg_weight: float,
         temperature: float,
@@ -234,16 +239,19 @@ class ChatterboxTTSProcessor:
             logger.warning(f"Empty text for base '{base_filename}'. Skipping.")
             return None
         try:
-            wav = self.model.generate(
-                text.strip(),
-                audio_prompt_path=audio_prompt_path,
-                exaggeration=exaggeration,
-                cfg_weight=cfg_weight,
-                temperature=temperature,
-                top_p=top_p,
-                min_p=min_p,
-                repetition_penalty=repetition_penalty,
-            )
+            # Build generation kwargs; only include audio_prompt_path if voice cloning is enabled
+            gen_kwargs = {
+                "exaggeration": exaggeration,
+                "cfg_weight": cfg_weight,
+                "temperature": temperature,
+                "top_p": top_p,
+                "min_p": min_p,
+                "repetition_penalty": repetition_penalty,
+            }
+            if self.enable_voice_cloning and audio_prompt_path:
+                gen_kwargs["audio_prompt_path"] = audio_prompt_path
+            
+            wav = self.model.generate(text.strip(), **gen_kwargs)
             wav_np = wav.squeeze(0).detach().cpu().numpy()
             ensure_dir_exists(output_dir)
             safe_base = get_safe_filename(base_filename)
@@ -311,10 +319,12 @@ class ChatterboxTTSProcessor:
         curr_top_p = self.default_top_p if top_p is None else float(top_p)
         curr_min_p = self.default_min_p if min_p is None else float(min_p)
         curr_rep = self.default_repetition_penalty if repetition_penalty is None else float(repetition_penalty)
-        # Enforce audio prompt requirement for Chatterbox
-        if curr_prompt is None:
+        
+        # Enforce audio prompt requirement only when voice cloning is enabled
+        if self.enable_voice_cloning and curr_prompt is None:
             logger.error(
-                "Chatterbox requires a reference audio_prompt_path (WAV/MP3/FLAC). Provide one to proceed."
+                "Voice cloning is enabled but no audio_prompt_path (WAV/MP3/FLAC) was provided. "
+                "Either provide a reference audio or disable voice cloning."
             )
             return []
         def _run_single() -> List[str]:
