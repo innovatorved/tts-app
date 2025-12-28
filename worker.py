@@ -1,5 +1,13 @@
 import logging
 import os
+
+# Set environment limits BEFORE importing torch/heavy libs
+# This is critical as PyTorch reads these at import time
+from utils.resource_limiter import ResourceConfig, apply_resource_limits, set_environment_limits
+
+# Apply environment-level thread limits early (before torch import)
+set_environment_limits(max_threads=4)  # Default conservative limit
+
 import database as db
 from utils.file_handler import ensure_dir_exists
 from utils.split_text import smart_split_text
@@ -43,6 +51,20 @@ def process_chunk_worker(job_name: str) -> int:
         db_conn.close()
         return 0
 
+    # Apply resource limits to prevent system overload
+    max_threads = job_data.get('max_torch_threads', 4)
+    # For Chatterbox, use more restrictive defaults
+    if job_data.get('engine') == 'chatterbox':
+        max_threads = min(max_threads, 2)  # Chatterbox needs fewer threads
+    
+    resource_config = ResourceConfig(
+        max_cpu_cores=job_data.get('max_cpu_cores'),
+        max_torch_threads=max_threads,
+        max_gpu_memory_fraction=job_data.get('max_gpu_memory', 0.75),
+        low_priority=job_data.get('low_priority', True),
+    )
+    apply_resource_limits(resource_config, device=job_data.get('device'))
+
     # This import needs to be inside the worker function for ProcessPoolExecutor
     from tts_engine.processor import KokoroTTSProcessor
     from tts_engine.chatterbox_processor import ChatterboxTTSProcessor
@@ -58,11 +80,9 @@ def process_chunk_worker(job_name: str) -> int:
             )
             tts_processor.set_generation_params(
                 audio_prompt_path=job_data['cb_audio_prompt'],
-                exaggeration=job_data['cb_exaggeration'],
-                cfg_weight=job_data['cb_cfg_weight'],
+
                 temperature=job_data['cb_temperature'],
                 top_p=job_data['cb_top_p'],
-                min_p=job_data['cb_min_p'],
                 repetition_penalty=job_data['cb_repetition_penalty'],
             )
         else:

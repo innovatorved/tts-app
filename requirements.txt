@@ -12,3 +12,4 @@ natsort
 gradio
 pandas
 rich
+peft==0.15.2

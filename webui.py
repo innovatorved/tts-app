@@ -75,7 +75,7 @@ def run_job_processing(job_name, num_workers):
 def create_and_run_job(
     file_obj, text_input, num_workers, paragraphs_per_chunk,
     output_dir, engine, lang, voice, speed, device, merge_output,
-    cb_audio_prompt, cb_exaggeration, cb_cfg_weight
+    cb_audio_prompt
 ):
     """Handles job creation and execution triggered by the Gradio Web UI.
 
@@ -96,8 +96,7 @@ def create_and_run_job(
         device: Compute device ('cpu', 'cuda', 'mps').
         merge_output: Boolean, whether to merge final audio.
         cb_audio_prompt: Reference audio file for Chatterbox.
-        cb_exaggeration: Exaggeration parameter for Chatterbox.
-        cb_cfg_weight: CFG weight for Chatterbox.
+
 
     Yields:
         A tuple of Gradio updates for the status box, audio output, and
@@ -139,8 +138,7 @@ def create_and_run_job(
             output_dir=output_dir, engine=engine, lang=lang,
             voice=voice, speed=speed, device=device, merge_output=merge_output,
             cb_audio_prompt=cb_prompt_path,
-            cb_exaggeration=cb_exaggeration,
-            cb_cfg_weight=cb_cfg_weight
+
         )
         if not job_id:
             yield f"Error: Job '{job_name}' already exists or could not be created.", None, gr.update(interactive=True), gr.update(interactive=True)
@@ -231,8 +229,7 @@ def create_ui():
 
                             with gr.Group(visible=False) as chatterbox_settings:
                                 cb_audio_prompt = gr.File(label="Reference Audio (Chatterbox)", file_types=[".wav", ".mp3", ".flac"])
-                                cb_exaggeration = gr.Slider(label="Exaggeration", minimum=0, maximum=2, value=0.5)
-                                cb_cfg_weight = gr.Slider(label="CFG Weight", minimum=0, maximum=2, value=0.5)
+
 
                             device = gr.Radio(["cpu", "cuda", "mps"], label="Device", value="cpu")
                             num_workers = gr.Slider(label="Number of Workers", minimum=1, maximum=os.cpu_count(), step=1, value=2)
@@ -267,7 +264,7 @@ def create_ui():
             inputs=[
                 file_input, text_input, num_workers, paragraphs_per_chunk,
                 output_dir, engine, lang, voice, speed, device, merge_output,
-                cb_audio_prompt, cb_exaggeration, cb_cfg_weight
+                cb_audio_prompt
             ],
             outputs=[status_box, audio_output, submit_btn, refresh_btn]
         )

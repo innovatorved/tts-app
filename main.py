@@ -58,7 +58,7 @@ def main():
     parser.add_argument("--job-name", type=str, help="Unique name for the conversion job. If not provided, one will be generated.")
     parser.add_argument("--resume", action="store_true", help="Resume a failed or interrupted job by its --job-name.")
     parser.add_argument("--monitor", action="store_true", help="Monitor the progress of a job by its --job-name.")
-    parser.add_argument("--num-workers", type=int, default=os.cpu_count(), help="Number of worker processes to use.")
+    parser.add_argument("--num-workers", type=int, default=2, help="Number of worker processes to use.")
 
     # --- Input source group (optional if resuming or monitoring) ---
     input_group = parser.add_mutually_exclusive_group()
@@ -82,12 +82,18 @@ def main():
     cb_group = parser.add_argument_group("Chatterbox Options")
     cb_group.add_argument("--cb_voice_cloning", action="store_true", help="Enable voice cloning mode for Chatterbox. Requires --cb_audio_prompt.")
     cb_group.add_argument("--cb_audio_prompt", type=str, help="Path to reference audio for Chatterbox voice cloning.")
-    cb_group.add_argument("--cb_exaggeration", type=float, default=0.5, help="Chatterbox emotion exaggeration.")
-    cb_group.add_argument("--cb_cfg_weight", type=float, default=0.5, help="Chatterbox CFG weight.")
+
     cb_group.add_argument("--cb_temperature", type=float, default=0.8, help="Chatterbox temperature.")
     cb_group.add_argument("--cb_top_p", type=float, default=1.0, help="Chatterbox top_p.")
-    cb_group.add_argument("--cb_min_p", type=float, default=0.05, help="Chatterbox min_p.")
     cb_group.add_argument("--cb_repetition_penalty", type=float, default=1.2, help="Chatterbox repetition penalty.")
+
+    # --- Resource control arguments ---
+    resource_group = parser.add_argument_group("Resource Control")
+    resource_group.add_argument("--max-cpu-cores", type=int, default=None, help="Max CPU cores to use. Default: no limit.")
+    resource_group.add_argument("--max-torch-threads", type=int, default=4, help="Max PyTorch threads per worker. Default: 4.")
+    resource_group.add_argument("--max-gpu-memory", type=float, default=0.75, help="Max GPU memory fraction (0.0-1.0). Default: 0.75.")
+    resource_group.add_argument("--low-priority", action="store_true", default=True, help="Run workers with lower CPU priority. Default: enabled.")
+    resource_group.add_argument("--no-low-priority", action="store_false", dest="low_priority", help="Disable low priority mode.")
 
     args = parser.parse_args()
 
@@ -159,12 +165,13 @@ def main():
             merge_output=args.merge_output,
             cb_audio_prompt=args.cb_audio_prompt,
             cb_voice_cloning=args.cb_voice_cloning,
-            cb_exaggeration=args.cb_exaggeration,
-            cb_cfg_weight=args.cb_cfg_weight,
             cb_temperature=args.cb_temperature,
             cb_top_p=args.cb_top_p,
-            cb_min_p=args.cb_min_p,
-            cb_repetition_penalty=args.cb_repetition_penalty
+            cb_repetition_penalty=args.cb_repetition_penalty,
+            max_cpu_cores=args.max_cpu_cores,
+            max_torch_threads=args.max_torch_threads,
+            max_gpu_memory=args.max_gpu_memory,
+            low_priority=args.low_priority
         )
 
         if not job_id:
@@ -180,11 +187,20 @@ def main():
 
     # --- Processing Logic ---
     if job_to_process:
-        logger.info(f"Starting ProcessPoolExecutor with {args.num_workers} workers for job '{job_to_process}'.")
+        num_workers = args.num_workers
+        
+        # For Chatterbox, limit to 1 worker to prevent system overload during model loading
+        # The Chatterbox model is very large and loading it in multiple processes simultaneously
+        # can overwhelm system memory and CPU
+        if args.engine == 'chatterbox' and num_workers > 1:
+            logger.warning(f"Chatterbox engine detected. Reducing workers from {num_workers} to 1 to prevent system overload.")
+            num_workers = 1
+        
+        logger.info(f"Starting ProcessPoolExecutor with {num_workers} workers for job '{job_to_process}'.")
         db.update_job_status(db_conn, db.get_job_by_name(db_conn, job_to_process)['id'], 'processing')
 
-        with ProcessPoolExecutor(max_workers=args.num_workers) as executor:
-            futures = [executor.submit(process_chunk_worker, job_to_process) for _ in range(args.num_workers)]
+        with ProcessPoolExecutor(max_workers=num_workers) as executor:
+            futures = [executor.submit(process_chunk_worker, job_to_process) for _ in range(num_workers)]
 
             total_processed = 0
             for future in as_completed(futures):

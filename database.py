@@ -48,12 +48,14 @@ def create_tables(conn):
                 merge_output BOOLEAN,
                 cb_audio_prompt TEXT,
                 cb_voice_cloning BOOLEAN DEFAULT 0,
-                cb_exaggeration REAL,
-                cb_cfg_weight REAL,
+
                 cb_temperature REAL,
                 cb_top_p REAL,
-                cb_min_p REAL,
                 cb_repetition_penalty REAL,
+                max_cpu_cores INTEGER,
+                max_torch_threads INTEGER DEFAULT 4,
+                max_gpu_memory REAL DEFAULT 0.75,
+                low_priority BOOLEAN DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
@@ -77,8 +79,9 @@ def create_tables(conn):
         logger.error(f"Error creating tables: {e}")
 
 def create_job(conn, job_name, input_file, output_dir, engine, lang, voice, speed, device, merge_output,
-               cb_audio_prompt=None, cb_voice_cloning=False, cb_exaggeration=None, cb_cfg_weight=None, cb_temperature=None,
-               cb_top_p=None, cb_min_p=None, cb_repetition_penalty=None):
+               cb_audio_prompt=None, cb_voice_cloning=False, cb_temperature=None,
+               cb_top_p=None, cb_repetition_penalty=None,
+               max_cpu_cores=None, max_torch_threads=4, max_gpu_memory=0.75, low_priority=True):
     """Creates a new job record in the 'jobs' table.
 
     If a job with the same `job_name` already exists, it does not create a
@@ -97,24 +100,22 @@ def create_job(conn, job_name, input_file, output_dir, engine, lang, voice, spee
         merge_output: Boolean flag to merge audio chunks.
         cb_audio_prompt: Path to reference audio for Chatterbox voice cloning.
         cb_voice_cloning: Boolean flag to enable voice cloning mode.
-        cb_exaggeration: Exaggeration parameter for Chatterbox.
-        cb_cfg_weight: CFG weight for Chatterbox.
-        cb_temperature: Temperature for Chatterbox.
-        cb_top_p: Top-p sampling for Chatterbox.
-        cb_min_p: Min-p sampling for Chatterbox.
+
         cb_repetition_penalty: Repetition penalty for Chatterbox.
 
     Returns:
         The integer ID of the newly created or existing job, or None on error.
     """
     sql = ''' INSERT INTO jobs(job_name, input_file, output_dir, engine, lang, voice, speed, device, merge_output,
-                               cb_audio_prompt, cb_voice_cloning, cb_exaggeration, cb_cfg_weight, cb_temperature,
-                               cb_top_p, cb_min_p, cb_repetition_penalty)
-              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) '''
+                               cb_audio_prompt, cb_voice_cloning, cb_temperature,
+                               cb_top_p, cb_repetition_penalty,
+                               max_cpu_cores, max_torch_threads, max_gpu_memory, low_priority)
+              VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) '''
     try:
         params = (job_name, input_file, output_dir, engine, lang, voice, speed, device, merge_output,
-                  cb_audio_prompt, cb_voice_cloning, cb_exaggeration, cb_cfg_weight, cb_temperature,
-                  cb_top_p, cb_min_p, cb_repetition_penalty)
+                  cb_audio_prompt, cb_voice_cloning, cb_temperature,
+                  cb_top_p, cb_repetition_penalty,
+                  max_cpu_cores, max_torch_threads, max_gpu_memory, low_priority)
         cursor = conn.cursor()
         cursor.execute(sql, params)
         conn.commit()

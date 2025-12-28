@@ -37,11 +37,9 @@ class ChatterboxTTSProcessor:
         enable_voice_cloning (bool): If True, uses reference audio for voice cloning.
         default_audio_prompt_path (str | None): Default path to the reference
             audio file for voice cloning (required when voice cloning is enabled).
-        default_exaggeration (float): Default emotional intensity control.
-        default_cfg_weight (float): Default guidance weight.
+
         default_temperature (float): Default sampling temperature.
         default_top_p (float): Default nucleus sampling probability.
-        default_min_p (float): Default minimum nucleus sampling probability.
         default_repetition_penalty (float): Default repetition penalty.
     """
 
@@ -73,11 +71,9 @@ class ChatterboxTTSProcessor:
 
     # Defaults; can be overridden by set_generation_params or per-call
         self.default_audio_prompt_path: Optional[str] = None
-        self.default_exaggeration: float = 0.5
-        self.default_cfg_weight: float = 0.5
+
         self.default_temperature: float = 0.8
         self.default_top_p: float = 1.0
-        self.default_min_p: float = 0.05
         self.default_repetition_penalty: float = 1.2
 
         self.default_repetition_penalty: float = 1.2
@@ -167,11 +163,9 @@ class ChatterboxTTSProcessor:
         self,
         *,
         audio_prompt_path: Optional[str] = None,
-        exaggeration: Optional[float] = None,
-        cfg_weight: Optional[float] = None,
+
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
-        min_p: Optional[float] = None,
         repetition_penalty: Optional[float] = None,
     ) -> None:
         """Sets the default parameters for audio generation.
@@ -179,25 +173,18 @@ class ChatterboxTTSProcessor:
         Args:
             audio_prompt_path: Path to a reference audio file (WAV/MP3/FLAC)
                 to guide the voice.
-            exaggeration: Emotion/intensity control (e.g., 0.5).
-            cfg_weight: Guidance weight (e.g., 0.5).
+
             temperature: Sampling temperature for generation.
             top_p: Nucleus sampling `p` value.
-            min_p: Minimum nucleus sampling `p` value.
             repetition_penalty: Penalty for repeating tokens.
         """
         if audio_prompt_path is not None:
             self.default_audio_prompt_path = self._prepare_audio_prompt(audio_prompt_path)
-        if exaggeration is not None:
-            self.default_exaggeration = float(exaggeration)
-        if cfg_weight is not None:
-            self.default_cfg_weight = float(cfg_weight)
+
         if temperature is not None:
             self.default_temperature = float(temperature)
         if top_p is not None:
             self.default_top_p = float(top_p)
-        if min_p is not None:
-            self.default_min_p = float(min_p)
         if repetition_penalty is not None:
             self.default_repetition_penalty = float(repetition_penalty)
 
@@ -208,11 +195,9 @@ class ChatterboxTTSProcessor:
         output_dir: str,
         base_filename: str,
         audio_prompt_path: Optional[str],
-        exaggeration: float,
-        cfg_weight: float,
+
         temperature: float,
         top_p: float,
-        min_p: float,
         repetition_penalty: float,
     ) -> Optional[str]:
         """Generates audio for a single text segment and returns the file path.
@@ -225,11 +210,9 @@ class ChatterboxTTSProcessor:
             output_dir: The directory to save the audio file.
             base_filename: The base name for the output file.
             audio_prompt_path: Path to the reference audio for voice cloning.
-            exaggeration: Emotion/intensity control.
-            cfg_weight: Guidance weight.
+
             temperature: Sampling temperature.
             top_p: Nucleus sampling `p` value.
-            min_p: Minimum nucleus sampling `p` value.
             repetition_penalty: Repetition penalty.
 
         Returns:
@@ -241,11 +224,9 @@ class ChatterboxTTSProcessor:
         try:
             # Build generation kwargs; only include audio_prompt_path if voice cloning is enabled
             gen_kwargs = {
-                "exaggeration": exaggeration,
-                "cfg_weight": cfg_weight,
+
                 "temperature": temperature,
                 "top_p": top_p,
-                "min_p": min_p,
                 "repetition_penalty": repetition_penalty,
             }
             if self.enable_voice_cloning and audio_prompt_path:
@@ -270,11 +251,9 @@ class ChatterboxTTSProcessor:
         output_dir: str,
         base_filename: str = "audio_segment",
         audio_prompt_path: Optional[str] = None,
-        exaggeration: Optional[float] = None,
-        cfg_weight: Optional[float] = None,
+
         temperature: Optional[float] = None,
         top_p: Optional[float] = None,
-        min_p: Optional[float] = None,
         repetition_penalty: Optional[float] = None,
         use_lock: bool = True,
         pre_split: bool = True,  # ignored; always single segment now
@@ -291,11 +270,9 @@ class ChatterboxTTSProcessor:
             output_dir: The directory to save the output audio file.
             base_filename: The base name for the output file.
             audio_prompt_path: Specific audio prompt to use for this call.
-            exaggeration: Specific exaggeration value for this call.
-            cfg_weight: Specific CFG weight for this call.
+
             temperature: Specific temperature for this call.
             top_p: Specific top_p for this call.
-            min_p: Specific min_p for this call.
             repetition_penalty: Specific repetition penalty for this call.
             use_lock: If True, uses a lock to ensure thread-safety.
             pre_split: Ignored; retained for compatibility. Assumes text is
@@ -313,11 +290,9 @@ class ChatterboxTTSProcessor:
         # If a specific prompt is provided for this call, optimize it on the fly (or use as is if optimization fails)
         # Note: Ideally, one should use set_generation_params for persistent prompts to avoid re-optimizing every call.
         curr_prompt = self._prepare_audio_prompt(audio_prompt_path) if audio_prompt_path is not None else self.default_audio_prompt_path
-        curr_exaggeration = self.default_exaggeration if exaggeration is None else float(exaggeration)
-        curr_cfg_weight = self.default_cfg_weight if cfg_weight is None else float(cfg_weight)
+
         curr_temperature = self.default_temperature if temperature is None else float(temperature)
         curr_top_p = self.default_top_p if top_p is None else float(top_p)
-        curr_min_p = self.default_min_p if min_p is None else float(min_p)
         curr_rep = self.default_repetition_penalty if repetition_penalty is None else float(repetition_penalty)
         
         # Enforce audio prompt requirement only when voice cloning is enabled
@@ -333,11 +308,9 @@ class ChatterboxTTSProcessor:
                 output_dir=output_dir,
                 base_filename=base_filename,
                 audio_prompt_path=curr_prompt,
-                exaggeration=curr_exaggeration,
-                cfg_weight=curr_cfg_weight,
+
                 temperature=curr_temperature,
                 top_p=curr_top_p,
-                min_p=curr_min_p,
                 repetition_penalty=curr_rep,
             )
             return [result] if result else []
