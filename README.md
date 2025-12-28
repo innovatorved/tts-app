@@ -158,7 +158,6 @@ python main.py --resume --job-name "my-book-job" --num-workers 4
 ### Chatterbox Engine Options
 - `--cb_voice_cloning`: Enable voice cloning mode. When enabled, requires `--cb_audio_prompt`. When disabled (default), Chatterbox generates speech with its default voice.
 - `--cb_audio_prompt <path.wav>`: Path to a reference audio file for voice cloning (requires `--cb_voice_cloning`).
-
 - `--cb_temperature <float>`: Sampling temperature (default: 0.8).
 - `--cb_top_p <float>`: Nucleus sampling `p` value (default: 1.0).
 - `--cb_repetition_penalty <float>`: Penalty for repeating tokens (default: 1.2).

@@ -101,6 +101,8 @@ def create_job(conn, job_name, input_file, output_dir, engine, lang, voice, spee
         cb_audio_prompt: Path to reference audio for Chatterbox voice cloning.
         cb_voice_cloning: Boolean flag to enable voice cloning mode.
 
+        cb_temperature: Temperature for Chatterbox.
+        cb_top_p: Top-p sampling for Chatterbox.
         cb_repetition_penalty: Repetition penalty for Chatterbox.
 
     Returns:
