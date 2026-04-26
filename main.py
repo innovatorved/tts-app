@@ -17,7 +17,10 @@ from utils.text_file_parser import extract_text_from_txt
 from utils.conversation_parser import extract_conversation_from_text
 from utils.split_text import split_text_into_chunks
 from utils.audio_merger import merge_audio_files
+from utils.hf_cache import configure_hf_for_kokoro, disable_hf_telemetry
 from worker import process_chunk_worker
+
+disable_hf_telemetry()
 
 # Adjust path to import from sibling directories
 # Adjust path to ensure the app's root directory is on sys.path
@@ -196,6 +199,12 @@ def main():
             logger.warning(f"Chatterbox engine detected. Reducing workers from {num_workers} to 1 to prevent system overload.")
             num_workers = 1
         
+        # Prefetch Kokoro weights once in the parent so workers inherit
+        # HF_HUB_OFFLINE=1 and skip per-process HEAD revalidation.
+        job_for_prefetch = db.get_job_by_name(db_conn, job_to_process)
+        if job_for_prefetch and job_for_prefetch.get('engine') == 'kokoro':
+            configure_hf_for_kokoro(voice=job_for_prefetch.get('voice') or 'af_heart')
+
         logger.info(f"Starting ProcessPoolExecutor with {num_workers} workers for job '{job_to_process}'.")
         db.update_job_status(db_conn, db.get_job_by_name(db_conn, job_to_process)['id'], 'processing')
 
@@ -228,7 +237,6 @@ def main():
                 else:
                     # Natural sort to ensure correct chronological ordering
                     sorted_files = natsort.natsorted(segment_files)
-                    print(sorted_files)
                     merged_filename = f"{job_to_process}_merged.wav"
                     merged_output_path = os.path.join(job_data['output_dir'], merged_filename)
                     logger.info(f"Merging {len(sorted_files)} segment files into {merged_output_path}")

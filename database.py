@@ -19,7 +19,12 @@ def create_connection(db_file="tts_jobs.db"):
     """
     conn = None
     try:
-        conn = sqlite3.connect(db_file, check_same_thread=False)
+        conn = sqlite3.connect(db_file, check_same_thread=False, timeout=30.0)
+        # Multi-process workers: reduce "database is locked" errors
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA busy_timeout=30000")
+        conn.commit()
         logger.info(f"Successfully connected to SQLite database: {db_file}")
     except sqlite3.Error as e:
         logger.error(f"Error connecting to database: {e}")

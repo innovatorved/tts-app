@@ -76,15 +76,13 @@ class KokoroTTSProcessor:
                     logger.info("MPS device requested and available.")
                 elif self.device == "cuda" and torch.cuda.is_available():
                     logger.info("CUDA device requested and available.")
-                    if (
-                        torch.cuda.is_available()
-                    ):  # Ensure cuda is truly available before trying to set
-                        try:
-                            torch.cuda.set_device(self.device)
-                        except Exception as e:
-                            logger.warning(
-                                f"Could not explicitly set CUDA device {self.device}, PyTorch will manage: {e}"
-                            )
+                    try:
+                        # set_device expects an int index or torch.device, not the string "cuda"
+                        torch.cuda.set_device(torch.device("cuda:0"))
+                    except Exception as e:
+                        logger.warning(
+                            f"Could not set default CUDA device, PyTorch will manage: {e}"
+                        )
                 else:
                     logger.info(
                         f"Device '{self.device}' requested. Model will run on CPU if not available/supported or auto-detected."
@@ -171,12 +169,14 @@ class KokoroTTSProcessor:
         )
         output_path = os.path.join(output_dir, f"{safe_base_filename}.wav")
         try:
-            generator = self.pipeline(
-                text.strip(), voice=voice, speed=speed, split_pattern=r"(?!.*)"
-            )
-            for i, (graphemes, phonemes, audio_data) in enumerate(generator):
-                sf.write(output_path, audio_data, 24000)
-                break
+            # inference_mode reduces autograd overhead on CPU/GPU during TTS forward
+            with torch.inference_mode():
+                generator = self.pipeline(
+                    text.strip(), voice=voice, speed=speed, split_pattern=r"(?!.*)"
+                )
+                for i, (graphemes, phonemes, audio_data) in enumerate(generator):
+                    sf.write(output_path, audio_data, 24000)
+                    break
             if os.path.exists(output_path):
                 return [output_path]
             else:

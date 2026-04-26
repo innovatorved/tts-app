@@ -8,6 +8,7 @@ import torch
 # Mock chatterbox module before importing processor
 sys.modules["chatterbox"] = MagicMock()
 sys.modules["chatterbox.tts"] = MagicMock()
+sys.modules["chatterbox.tts_turbo"] = MagicMock()
 sys.modules["soundfile"] = MagicMock()
 
 # Now import the processor
@@ -15,12 +16,13 @@ from tts_engine.chatterbox_processor import ChatterboxTTSProcessor
 
 class TestChatterboxOptimization(unittest.TestCase):
     def setUp(self):
-        # Mock _ChatterboxTTS to avoid ImportError in __init__
+        # Mock Chatterbox Turbo class (processor uses ChatterboxTurboTTS / tts_turbo)
         self.mock_tts_cls = MagicMock()
         self.mock_tts_cls.from_pretrained.return_value = MagicMock(sr=24000)
-        
-        # Patch the module-level variable in chatterbox_processor
-        self.patcher = patch("tts_engine.chatterbox_processor._ChatterboxTTS", self.mock_tts_cls)
+
+        self.patcher = patch(
+            "tts_engine.chatterbox_processor._ChatterboxTurboTTS", self.mock_tts_cls
+        )
         self.patcher.start()
         
         self.torch_patcher = patch("tts_engine.chatterbox_processor.torch", torch)
@@ -53,7 +55,8 @@ class TestChatterboxOptimization(unittest.TestCase):
             optimized_path = processor._prepare_audio_prompt(dummy_path)
 
         # Verify load called
-        mock_torchaudio.load.assert_called_with(dummy_path)
+        mock_torchaudio.load.assert_called()
+        self.assertEqual(mock_torchaudio.load.call_args[0][0], dummy_path)
         
         # Verify Resample initialized and called
         mock_torchaudio.transforms.Resample.assert_called_with(orig_freq=48000, new_freq=24000)

@@ -76,8 +76,6 @@ class ChatterboxTTSProcessor:
         self.default_top_p: float = 1.0
         self.default_repetition_penalty: float = 1.2
 
-        self.default_repetition_penalty: float = 1.2
-
         self._initialize_model()
 
     def _prepare_audio_prompt(self, audio_path: str) -> str:
@@ -154,6 +152,8 @@ class ChatterboxTTSProcessor:
         logger.info(f"Initializing Chatterbox Turbo TTS on device='{self.device}'.")
         try:
             self.model = _ChatterboxTurboTTS.from_pretrained(device=self.device)
+            if hasattr(self.model, "eval"):
+                self.model.eval()
             logger.info("Chatterbox Turbo TTS model initialized successfully.")
         except Exception as e:
             logger.error(f"Failed to load Chatterbox Turbo model: {e}")
@@ -231,8 +231,9 @@ class ChatterboxTTSProcessor:
             }
             if self.enable_voice_cloning and audio_prompt_path:
                 gen_kwargs["audio_prompt_path"] = audio_prompt_path
-            
-            wav = self.model.generate(text.strip(), **gen_kwargs)
+
+            with torch.inference_mode():
+                wav = self.model.generate(text.strip(), **gen_kwargs)
             wav_np = wav.squeeze(0).detach().cpu().numpy()
             ensure_dir_exists(output_dir)
             safe_base = get_safe_filename(base_filename)

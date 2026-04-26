@@ -1,5 +1,7 @@
-import PyPDF2
 import logging
+
+from pypdf import PdfReader
+from pypdf.errors import PdfReadError
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +28,7 @@ def extract_text_from_pdf(pdf_path: str) -> str | None:
     try:
         logger.info(f"Attempting to open PDF: {pdf_path}")
         with open(pdf_path, "rb") as pdf_file:
-            pdf_reader = PyPDF2.PdfReader(pdf_file)
+            pdf_reader = PdfReader(pdf_file)
             text_content = []
             num_pages = len(pdf_reader.pages)
             logger.info(f"PDF has {num_pages} pages.")
@@ -43,7 +45,7 @@ def extract_text_from_pdf(pdf_path: str) -> str | None:
     except FileNotFoundError:
         logger.error(f"PDF file not found: {pdf_path}")
         return None
-    except PyPDF2.errors.PdfReadError:
+    except PdfReadError:
         logger.error(
             f"Could not read PDF (possibly corrupted or password-protected without password): {pdf_path}"
         )

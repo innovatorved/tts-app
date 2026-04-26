@@ -1,15 +1,23 @@
+# Used by: conda env create -f environment.yml (recommended)
+# Or (Python 3.11 venv only): pip install -U pip setuptools wheel && pip install -r requirements.txt
+#
+# Do not use Python 3.13+ for this full stack: Chatterbox → spaCy → thinc → blis may compile
+# from source and fail (see blis/cy.c errors on 3.14). Use conda + 3.11 above.
+#
+# GPU: after the env is ready, reinstall torch/torchaudio from https://pytorch.org/get-started/locally/ if you need CUDA.
+
 chatterbox-tts>=0.1.6
 kokoro
 torch
 torchaudio
 soundfile
-PyPDF2
+pypdf>=5.0.0
 misaki[en]
-# For Japanese support, add: misaki[ja]
-# For Chinese support, add: misaki[zh]
 pydub
+audioop-lts>=0.2.0; python_version >= "3.13"
 natsort
-gradio
+gradio>=4.0
 pandas
 rich
-peft==0.15.2
+pytest>=7.0
+pip-audit>=2.6

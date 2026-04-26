@@ -18,6 +18,9 @@ from utils.text_file_parser import extract_text_from_txt
 from utils.split_text import split_text_into_chunks
 from utils.audio_merger import merge_audio_files
 from utils.file_handler import ensure_dir_exists
+from utils.hf_cache import configure_hf_for_kokoro, disable_hf_telemetry
+
+disable_hf_telemetry()
 
 # Adjust path to import from sibling directories
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -50,8 +53,12 @@ def run_job_processing(job_name, num_workers):
         return False
     
     try:
+        job_record = db.get_job_by_name(db_conn, job_name)
+        if job_record and job_record.get('engine') == 'kokoro':
+            configure_hf_for_kokoro(voice=job_record.get('voice') or 'af_heart')
+
         logger.info(f"Starting ProcessPoolExecutor with {num_workers} workers for job '{job_name}'.")
-        job_id = db.get_job_by_name(db_conn, job_name)['id']
+        job_id = job_record['id']
         db.update_job_status(db_conn, job_id, 'processing')
         
         with ProcessPoolExecutor(max_workers=num_workers) as executor:
@@ -73,9 +80,25 @@ def run_job_processing(job_name, num_workers):
         db_conn.close()
 
 def create_and_run_job(
-    file_obj, text_input, num_workers, paragraphs_per_chunk,
-    output_dir, engine, lang, voice, speed, device, merge_output,
-    cb_audio_prompt
+    file_obj,
+    text_input,
+    num_workers,
+    paragraphs_per_chunk,
+    output_dir,
+    engine,
+    lang,
+    voice,
+    speed,
+    device,
+    merge_output,
+    cb_audio_prompt,
+    cb_voice_cloning,
+    cb_temperature,
+    cb_top_p,
+    cb_repetition_penalty,
+    max_torch_threads,
+    max_gpu_memory,
+    low_priority,
 ):
     """Handles job creation and execution triggered by the Gradio Web UI.
 
@@ -96,7 +119,11 @@ def create_and_run_job(
         device: Compute device ('cpu', 'cuda', 'mps').
         merge_output: Boolean, whether to merge final audio.
         cb_audio_prompt: Reference audio file for Chatterbox.
-
+        cb_voice_cloning: Enable Chatterbox voice cloning (requires prompt when True).
+        cb_temperature, cb_top_p, cb_repetition_penalty: Chatterbox sampling params.
+        max_torch_threads: PyTorch intra-op thread cap per worker.
+        max_gpu_memory: GPU memory fraction cap (0.0–1.0).
+        low_priority: Lower worker process CPU priority when True.
 
     Yields:
         A tuple of Gradio updates for the status box, audio output, and
@@ -123,8 +150,8 @@ def create_and_run_job(
                 text_to_process = extract_text_from_txt(input_file_path)
         elif text_input:
             text_to_process = text_input
-        
-        if not text_to_process.strip():
+
+        if not text_to_process or not str(text_to_process).strip():
             yield "Error: No text to process.", None, gr.update(interactive=True), gr.update(interactive=True)
             return
 
@@ -133,12 +160,25 @@ def create_and_run_job(
         # --- Create Job in DB ---
         cb_prompt_path = cb_audio_prompt.name if cb_audio_prompt else None
         job_id = db.create_job(
-            conn=db_conn, job_name=job_name,
+            conn=db_conn,
+            job_name=job_name,
             input_file=input_file_path,
-            output_dir=output_dir, engine=engine, lang=lang,
-            voice=voice, speed=speed, device=device, merge_output=merge_output,
+            output_dir=output_dir,
+            engine=engine,
+            lang=lang,
+            voice=voice,
+            speed=speed,
+            device=device,
+            merge_output=merge_output,
             cb_audio_prompt=cb_prompt_path,
-
+            cb_voice_cloning=cb_voice_cloning,
+            cb_temperature=cb_temperature,
+            cb_top_p=cb_top_p,
+            cb_repetition_penalty=cb_repetition_penalty,
+            max_cpu_cores=None,
+            max_torch_threads=int(max_torch_threads),
+            max_gpu_memory=float(max_gpu_memory),
+            low_priority=low_priority,
         )
         if not job_id:
             yield f"Error: Job '{job_name}' already exists or could not be created.", None, gr.update(interactive=True), gr.update(interactive=True)
@@ -151,7 +191,15 @@ def create_and_run_job(
         status_message = f"Job '{job_name}' created with {len(text_chunks)} chunks. Processing..."
         yield status_message, None, gr.update(interactive=False), gr.update(interactive=False)
 
-        job_successful = run_job_processing(job_name, num_workers)
+        effective_workers = int(num_workers)
+        if engine == "chatterbox" and effective_workers > 1:
+            logger.warning(
+                "Chatterbox engine: reducing workers from %s to 1 to avoid loading multiple large models.",
+                effective_workers,
+            )
+            effective_workers = 1
+
+        job_successful = run_job_processing(job_name, effective_workers)
 
         # --- Finalize and Return Result ---
         if job_successful:
@@ -208,7 +256,7 @@ def create_ui():
     Returns:
         A Gradio Blocks interface object.
     """
-    with gr.Blocks(title="TTS App - Advanced", theme=gr.themes.Monochrome()) as interface:
+    with gr.Blocks(title="TTS App - Advanced") as interface:
         gr.Markdown("# 🎵 TTS: Scalable Text-to-Speech")
         
         with gr.Tabs():
@@ -228,13 +276,56 @@ def create_ui():
                                 speed = gr.Slider(label="Speed", minimum=0.5, maximum=2.0, value=1.0)
 
                             with gr.Group(visible=False) as chatterbox_settings:
-                                cb_audio_prompt = gr.File(label="Reference Audio (Chatterbox)", file_types=[".wav", ".mp3", ".flac"])
-
+                                cb_voice_cloning = gr.Checkbox(
+                                    label="Enable voice cloning (requires reference audio)",
+                                    value=False,
+                                )
+                                cb_audio_prompt = gr.File(
+                                    label="Reference Audio (Chatterbox)",
+                                    file_types=[".wav", ".mp3", ".flac"],
+                                )
+                                cb_temperature = gr.Slider(
+                                    label="Chatterbox temperature", minimum=0.1, maximum=1.5, value=0.8
+                                )
+                                cb_top_p = gr.Slider(
+                                    label="Chatterbox top_p", minimum=0.1, maximum=1.0, value=1.0
+                                )
+                                cb_repetition_penalty = gr.Slider(
+                                    label="Chatterbox repetition penalty",
+                                    minimum=0.5,
+                                    maximum=2.0,
+                                    value=1.2,
+                                )
 
                             device = gr.Radio(["cpu", "cuda", "mps"], label="Device", value="cpu")
-                            num_workers = gr.Slider(label="Number of Workers", minimum=1, maximum=os.cpu_count(), step=1, value=2)
-                            paragraphs_per_chunk = gr.Slider(label="Paragraphs per Chunk", minimum=1, maximum=50, step=1, value=10)
+                            num_workers = gr.Slider(
+                                label="Number of Workers",
+                                minimum=1,
+                                maximum=max(1, os.cpu_count() or 1),
+                                step=1,
+                                value=2,
+                            )
+                            paragraphs_per_chunk = gr.Slider(
+                                label="Paragraphs per Chunk", minimum=1, maximum=50, step=1, value=10
+                            )
                             merge_output = gr.Checkbox(label="Merge Output Audio", value=True)
+                            max_torch_threads = gr.Slider(
+                                label="Max PyTorch threads (per worker)",
+                                minimum=1,
+                                maximum=16,
+                                step=1,
+                                value=4,
+                            )
+                            max_gpu_memory = gr.Slider(
+                                label="Max GPU memory fraction",
+                                minimum=0.25,
+                                maximum=1.0,
+                                step=0.05,
+                                value=0.75,
+                            )
+                            low_priority = gr.Checkbox(
+                                label="Run workers at lower CPU priority", value=True
+                            )
 
                     with gr.Column(scale=1):
                         status_box = gr.Textbox(label="Status", interactive=False)
@@ -262,11 +353,27 @@ def create_ui():
         submit_btn.click(
             create_and_run_job,
             inputs=[
-                file_input, text_input, num_workers, paragraphs_per_chunk,
-                output_dir, engine, lang, voice, speed, device, merge_output,
-                cb_audio_prompt
+                file_input,
+                text_input,
+                num_workers,
+                paragraphs_per_chunk,
+                output_dir,
+                engine,
+                lang,
+                voice,
+                speed,
+                device,
+                merge_output,
+                cb_audio_prompt,
+                cb_voice_cloning,
+                cb_temperature,
+                cb_top_p,
+                cb_repetition_penalty,
+                max_torch_threads,
+                max_gpu_memory,
+                low_priority,
             ],
-            outputs=[status_box, audio_output, submit_btn, refresh_btn]
+            outputs=[status_box, audio_output, submit_btn, refresh_btn],
         )
         
         refresh_btn.click(
@@ -287,4 +394,5 @@ if __name__ == "__main__":
         init_db_conn.close()
 
     ui = create_ui()
-    ui.launch(server_name="0.0.0.0", server_port=7860, share=False)
+    ui.queue()
+    ui.launch(server_name="0.0.0.0", server_port=7860, share=False, theme=gr.themes.Monochrome())
